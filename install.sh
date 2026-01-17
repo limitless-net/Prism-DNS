@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.2 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.3 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置
-#   Prism-DNS Unlock Service Setup Script (V3.2)
+#   Prism-DNS Unlock Service Setup Script (V3.3)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config
 # ==========================================================
 
@@ -732,55 +732,41 @@ generate_json() {
     echo -e "${YELLOW}"
 
     # Route rules description / 路由规则说明:
-    # 1. DNS traffic sent to dns-out / DNS 流量发送到 dns-out
-    # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
-    # 3. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
-    # 4. Unlock domain traffic goes direct (DNS already hijacked to unlock server, route allows here) / 解锁域名流量走 direct (DNS 已劫持解析到解锁服务器，此处路由放行)
-    # 5. All other traffic goes direct (default fallback rule, ensures normal traffic not dropped) / 其他所有流量走 direct (默认兜底规则，确保正常流量不被遗漏)
+    # 1. Private IP traffic blocked / 私有 IP 流量被屏蔽
+    # 2. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
+    # 3. All other traffic goes direct via UDP/TCP / 其他所有流量通过 UDP/TCP 走 direct
 
     cat <<EOF
 {
-  "log": {
-    "level": "warn",
-    "timestamp": true
-  },
   "dns": {
     "servers": [
       {
-        "tag": "google",
-        "address": "8.8.8.8",
-        "detour": "direct"
-      },
-      {
-        "tag": "my_private_unlock",
-        "address": "${FINAL_IP}",
-        "detour": "direct"
-      }
-    ],
-    "rules": [
-      {
-        "domain_suffix": [
-          ${FINAL_JSON_LIST}
-        ],
-        "server": "my_private_unlock"
+        "tag": "cf",
+        "address": "1.1.1.1"
       }
     ],
     "strategy": "prefer_ipv4"
   },
-  "inbounds": [],
   "outbounds": [
     {
       "tag": "direct",
       "type": "direct",
-      "domain_strategy": "prefer_ipv4"
+      "domain_resolver": {
+        "server": "cf",
+        "strategy": "prefer_ipv4"
+      }
     },
-    { "tag": "block", "type": "block" },
-    { "tag": "dns-out", "type": "dns" }
+    {
+      "type": "block",
+      "tag": "block"
+    }
   ],
   "route": {
     "rules": [
-      { "protocol": "dns", "outbound": "dns-out" },
-      { "ip_is_private": true, "outbound": "block" },
+      {
+        "ip_is_private": true,
+        "outbound": "block"
+      },
       {
         "domain_regex": [
             "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
@@ -809,16 +795,12 @@ generate_json() {
         "outbound": "block"
       },
       {
-        "domain_suffix": [
-          ${FINAL_JSON_LIST}
-        ],
-        "outbound": "direct"
-      },
-      {
-        "outbound": "direct"
+        "outbound": "direct",
+        "network": [
+          "udp","tcp"
+        ]
       }
-    ],
-    "auto_detect_interface": true
+    ]
   },
   "experimental": {
     "cache_file": {
