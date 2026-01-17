@@ -1,4 +1,4 @@
-FROM debian:latest
+FROM debian:12
 
 # Install dnsmasq and sniproxy
 RUN apt-get update && \
@@ -54,9 +54,6 @@ conf-dir=/etc/dnsmasq.d/,*.conf\n\
 no-hosts\n\
 # Cache settings\n\
 cache-size=1000\n\
-# Log queries for debugging\n\
-log-queries\n\
-log-facility=-\n\
 " > /etc/dnsmasq.conf
 
 # Start script - improved to handle signals properly
@@ -76,7 +73,7 @@ trap shutdown SIGTERM SIGINT\n\
 \n\
 # Start dnsmasq in background\n\
 echo "Starting dnsmasq..."\n\
-dnsmasq --no-daemon --log-queries &\n\
+dnsmasq --no-daemon &\n\
 dnsmasq_pid=$!\n\
 \n\
 # Give dnsmasq a moment to start\n\
