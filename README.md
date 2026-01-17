@@ -25,6 +25,19 @@
 
 ## 🆕 最近更新
 
+### v4.3 - 2026年1月 修复间歇性断流问题
+
+此版本修复了用户报告的间歇性连接断流问题，特别是 Netflix 和 ChatGPT 交替无法访问的情况：
+
+- **新增 `independent_cache: true`**：启用 DNS 服务器独立缓存，防止不同 DNS 服务器之间的响应污染，减少因缓存混淆导致的断流
+- **扩展 ChatGPT 域名列表**：新增 `openaiapi-site.azureedge.net`、`client.crisp.chat`、`livekit.cloud`、`launchdarkly.com`、`cloudflareinsights.com`、`clarity.ms`、`hcaptcha.com`、`turnstile.com` 等 ChatGPT 依赖的第三方服务域名
+- **扩展流媒体域名列表**：新增 `nflxext.net`、`max.com`、`disneynow.com`、`disneystreaming.com`、`starplus.com`、`d23.com` 等 Netflix 和 Disney+ 依赖的域名
+- **减少断流频率**：通过独立 DNS 缓存机制，确保解锁域名的 DNS 响应不会被普通域名的缓存污染
+
+> **问题原因**：当解锁域名和普通域名的 DNS 缓存混合时，可能导致解锁域名使用了错误的 DNS 响应，造成间歇性连接失败。
+>
+> **对现有用户的影响**：如果你在 v4.2 遇到间歇性断流（Netflix/ChatGPT 交替无法访问，或所有解锁服务同时失败而普通网站正常），请重新运行脚本并更新配置。
+
 ### v4.2 - 2026年1月 性能优化 - 修复高延迟问题
 
 此版本修复了 v4.1 引入的全局 DNS 缓存禁用导致的高延迟问题：
