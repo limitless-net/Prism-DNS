@@ -222,7 +222,7 @@ EOL
 # 5. 配置白名单防火墙
 set_firewall() {
     echo -e "\n${YELLOW}--- 安全配置：防火墙白名单 ---${NC}"
-    echo "请输入【客户端 IP】（即你的阿里云深圳/腾讯云广州的公网IP）"
+    echo "请输入【客户端 IP】（即你的落地机公网IP）"
     echo "多个 IP 用空格隔开，回车跳过"
     read -p "客户端 IP: " CLIENT_IPS
 
