@@ -254,6 +254,12 @@ verify_services() {
     echo -e "\n${YELLOW}正在验证服务状态...${NC}"
     sleep 3
     
+    # 检查必要的变量是否已设置
+    if [ -z "$FINAL_IP" ]; then
+        echo -e "${RED}错误: 未检测到解锁 IP 地址${NC}"
+        return 1
+    fi
+    
     # 检查容器状态
     if docker ps | grep -q "dns_unlock"; then
         echo -e "${GREEN}✓ Docker 容器运行正常${NC}"
@@ -321,7 +327,11 @@ verify_services() {
         DNS_OUTPUT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null)
         DNS_RESULT=$(echo "$DNS_OUTPUT" | grep -v "^Server:" | grep "Address:" | tail -1 | awk '{print $2}' | tr -d '#')
         
-        if [ "$DNS_RESULT" == "$FINAL_IP" ]; then
+        # 处理空结果的情况
+        if [ -z "$DNS_RESULT" ]; then
+            echo -e "${YELLOW}⚠ DNS 测试未能获取解析结果${NC}"
+            echo -e "${YELLOW}  提示: 等待 Docker 服务完全启动后，可手动测试: nslookup $TEST_DOMAIN $FINAL_IP${NC}"
+        elif [ "$DNS_RESULT" == "$FINAL_IP" ]; then
             echo -e "${GREEN}✓ DNS 劫持配置正确 ($TEST_DOMAIN -> $FINAL_IP)${NC}"
         else
             echo -e "${YELLOW}⚠ DNS 测试: $TEST_DOMAIN 解析为 $DNS_RESULT${NC}"
