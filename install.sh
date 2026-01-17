@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.9 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.0 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V3.9)
+#   Prism-DNS Unlock Service Setup Script (V4.0)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
@@ -1156,6 +1156,14 @@ generate_json() {
       "type": "direct"
     },
     {
+      "tag": "unlock",
+      "type": "direct",
+      "domain_resolver": {
+        "server": "unlock_dns",
+        "strategy": "prefer_ipv4"
+      }
+    },
+    {
       "tag": "block",
       "type": "block"
     }
@@ -1199,7 +1207,7 @@ generate_json() {
       },
       {
         "domain_suffix": [${FINAL_JSON_LIST}],
-        "outbound": "direct"
+        "outbound": "unlock"
       },
       {
         "ip_is_private": true,
