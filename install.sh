@@ -264,19 +264,19 @@ verify_services() {
     
     # 检查端口监听
     echo -e "\n${YELLOW}检查端口监听状态：${NC}"
-    if netstat -tuln 2>/dev/null | grep -q ":53 " || ss -tuln 2>/dev/null | grep -q ":53 "; then
+    if netstat -tuln 2>/dev/null | grep -E ':53[[:space:]]' || ss -tuln 2>/dev/null | grep -E ':53[[:space:]]'; then
         echo -e "${GREEN}✓ DNS 端口 (53) 正常监听${NC}"
     else
         echo -e "${RED}✗ DNS 端口 (53) 未监听${NC}"
     fi
     
-    if netstat -tuln 2>/dev/null | grep -q ":80 " || ss -tuln 2>/dev/null | grep -q ":80 "; then
+    if netstat -tuln 2>/dev/null | grep -E ':80[[:space:]]' || ss -tuln 2>/dev/null | grep -E ':80[[:space:]]'; then
         echo -e "${GREEN}✓ HTTP 端口 (80) 正常监听${NC}"
     else
         echo -e "${RED}✗ HTTP 端口 (80) 未监听${NC}"
     fi
     
-    if netstat -tuln 2>/dev/null | grep -q ":443 " || ss -tuln 2>/dev/null | grep -q ":443 "; then
+    if netstat -tuln 2>/dev/null | grep -E ':443[[:space:]]' || ss -tuln 2>/dev/null | grep -E ':443[[:space:]]'; then
         echo -e "${GREEN}✓ HTTPS 端口 (443) 正常监听${NC}"
     else
         echo -e "${RED}✗ HTTPS 端口 (443) 未监听${NC}"
@@ -284,17 +284,33 @@ verify_services() {
     
     # DNS 解析测试
     echo -e "\n${YELLOW}测试 DNS 解析功能：${NC}"
+    
+    # 根据选择的模式确定测试域名
     TEST_DOMAIN="openai.com"
-    if echo "$FINAL_JSON_LIST" | grep -q "netflix.com"; then
-        TEST_DOMAIN="netflix.com"
+    if [ -n "$FINAL_JSON_LIST" ]; then
+        if echo "$FINAL_JSON_LIST" | grep -q "netflix.com"; then
+            TEST_DOMAIN="netflix.com"
+        fi
     fi
     
-    DNS_RESULT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null | grep "Address:" | tail -1 | awk '{print $2}')
-    if [ "$DNS_RESULT" == "$FINAL_IP" ]; then
-        echo -e "${GREEN}✓ DNS 劫持配置正确 ($TEST_DOMAIN -> $FINAL_IP)${NC}"
+    # 检查 nslookup 是否可用
+    if command -v nslookup &> /dev/null; then
+        DNS_RESULT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null | grep -A1 "Name:" | grep "Address:" | tail -1 | awk '{print $2}')
+        
+        # 如果没有找到，尝试另一种格式
+        if [ -z "$DNS_RESULT" ]; then
+            DNS_RESULT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null | grep "^Address:" | tail -1 | awk '{print $2}')
+        fi
+        
+        if [ "$DNS_RESULT" == "$FINAL_IP" ]; then
+            echo -e "${GREEN}✓ DNS 劫持配置正确 ($TEST_DOMAIN -> $FINAL_IP)${NC}"
+        else
+            echo -e "${YELLOW}⚠ DNS 测试: $TEST_DOMAIN 解析为 $DNS_RESULT${NC}"
+            echo -e "${YELLOW}  提示: 等待 Docker 服务完全启动后，可手动测试: nslookup $TEST_DOMAIN $FINAL_IP${NC}"
+        fi
     else
-        echo -e "${YELLOW}⚠ DNS 测试: $TEST_DOMAIN 解析为 $DNS_RESULT${NC}"
-        echo -e "${YELLOW}  (这可能是正常的，取决于测试域名是否在你选择的解锁列表中)${NC}"
+        echo -e "${YELLOW}⚠ nslookup 未安装，跳过 DNS 解析测试${NC}"
+        echo -e "${YELLOW}  可手动安装后测试: apt install -y dnsutils && nslookup $TEST_DOMAIN $FINAL_IP${NC}"
     fi
     
     return 0
