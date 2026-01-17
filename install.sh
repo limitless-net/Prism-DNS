@@ -350,7 +350,13 @@ install_docker() {
     echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
     
     if ! command -v docker &> /dev/null; then
-        echo -e "${YELLOW}Installing Docker / 正在安装 Docker...${NC}"
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Installing Docker..." || echo "正在安装 Docker...")${NC}"
+        if [ "$LANG_CHOICE" = "en" ]; then
+            echo -e "${SKY}This may take 1-3 minutes depending on network speed. Please wait...${NC}"
+        else
+            echo -e "${SKY}这可能需要 1-3 分钟，具体取决于网络速度。请稍候...${NC}"
+        fi
+        
         (curl -fsSL https://get.docker.com | bash > /tmp/docker_install.log 2>&1) &
         local pid=$!
         spinner $pid "Downloading and installing Docker / 下载并安装 Docker..."
@@ -377,9 +383,14 @@ install_docker() {
     fi
     
     # Check for docker compose (v2) or docker-compose (v1)
+    echo -e "\n${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Checking Docker Compose..." || echo "检查 Docker Compose...")${NC}"
     if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
-        echo -e "${YELLOW}Installing Docker Compose / 正在安装 Docker Compose...${NC}"
-        apt-get install -y docker-compose-plugin 2>/dev/null || apt-get install -y docker-compose 2>/dev/null
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Installing Docker Compose..." || echo "正在安装 Docker Compose...")${NC}"
+        
+        (apt-get install -y docker-compose-plugin 2>/dev/null || apt-get install -y docker-compose 2>/dev/null) &
+        local pid=$!
+        spinner $pid "Installing Docker Compose / 安装 Docker Compose..."
+        wait $pid
         
         # Verify Docker Compose was installed
         if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
@@ -439,35 +450,59 @@ install_native() {
     [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Installing Native Dependencies${NC}" || echo -e "${SKY}  安装原生依赖${NC}"
     echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
     
-    echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Updating package list..." || echo "更新软件包列表...")${NC}"
-    apt-get update > /dev/null 2>&1
+    echo -e "${YELLOW}[1/3] $([ "$LANG_CHOICE" = "en" ] && echo "Updating package list..." || echo "更新软件包列表...")${NC}"
+    if [ "$LANG_CHOICE" = "en" ]; then
+        echo -e "${SKY}This may take a moment. Please wait...${NC}"
+    else
+        echo -e "${SKY}这可能需要一些时间。请稍候...${NC}"
+    fi
+    
+    (apt-get update > /tmp/apt_update.log 2>&1) &
+    local pid=$!
+    spinner $pid "Updating package list / 更新软件包列表..."
+    wait $pid
+    
+    if [ $? -ne 0 ]; then
+        echo -e "${YELLOW}⚠ $([ "$LANG_CHOICE" = "en" ] && echo "Package update had warnings, continuing..." || echo "软件包更新有警告，继续...")${NC}"
+    else
+        echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Package list updated" || echo "软件包列表已更新")${NC}"
+    fi
     
     # Install dnsmasq
+    echo -e "\n${YELLOW}[2/3] $([ "$LANG_CHOICE" = "en" ] && echo "Installing dnsmasq (DNS server)..." || echo "安装 dnsmasq (DNS 服务器)...")${NC}"
     if ! command -v dnsmasq &> /dev/null; then
-        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Installing dnsmasq..." || echo "正在安装 dnsmasq...")${NC}"
-        apt-get install -y dnsmasq > /dev/null 2>&1
+        (apt-get install -y dnsmasq > /tmp/dnsmasq_install.log 2>&1) &
+        local pid=$!
+        spinner $pid "Installing dnsmasq / 安装 dnsmasq..."
+        wait $pid
+        
         if ! command -v dnsmasq &> /dev/null; then
-            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to install dnsmasq" || echo "dnsmasq 安装失败")${NC}"
+            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to install dnsmasq. Check /tmp/dnsmasq_install.log" || echo "dnsmasq 安装失败。查看 /tmp/dnsmasq_install.log")${NC}"
             exit 1
         fi
-        echo -e "${GREEN}✓ dnsmasq installed / dnsmasq 已安装${NC}"
+        echo -e "${GREEN}✓ dnsmasq installed successfully / dnsmasq 安装成功${NC}"
     else
         echo -e "${GREEN}✓ dnsmasq already installed / dnsmasq 已安装${NC}"
     fi
     
     # Install sniproxy
+    echo -e "\n${YELLOW}[3/3] $([ "$LANG_CHOICE" = "en" ] && echo "Installing sniproxy (SNI proxy)..." || echo "安装 sniproxy (SNI 代理)...")${NC}"
     if ! command -v sniproxy &> /dev/null; then
-        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Installing sniproxy..." || echo "正在安装 sniproxy...")${NC}"
-        apt-get install -y sniproxy > /dev/null 2>&1
+        (apt-get install -y sniproxy > /tmp/sniproxy_install.log 2>&1) &
+        local pid=$!
+        spinner $pid "Installing sniproxy / 安装 sniproxy..."
+        wait $pid
+        
         if ! command -v sniproxy &> /dev/null; then
-            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to install sniproxy" || echo "sniproxy 安装失败")${NC}"
+            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to install sniproxy. Check /tmp/sniproxy_install.log" || echo "sniproxy 安装失败。查看 /tmp/sniproxy_install.log")${NC}"
             exit 1
         fi
-        echo -e "${GREEN}✓ sniproxy installed / sniproxy 已安装${NC}"
+        echo -e "${GREEN}✓ sniproxy installed successfully / sniproxy 安装成功${NC}"
     else
         echo -e "${GREEN}✓ sniproxy already installed / sniproxy 已安装${NC}"
     fi
     
+    echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "All dependencies installed successfully" || echo "所有依赖安装成功")${NC}"
     sleep 1
 }
 
@@ -760,7 +795,28 @@ EOL
     docker compose down 2>/dev/null
     
     echo -e "${YELLOW}Step 1/2: Building Docker image / 步骤 1/2: 构建镜像${NC}"
-    docker compose build 2>&1 | grep -E "(Step|Successfully|ERROR)" || docker compose build
+    if [ "$LANG_CHOICE" = "en" ]; then
+        echo -e "${SKY}This may take 1-3 minutes depending on network speed. Please wait...${NC}"
+    else
+        echo -e "${SKY}这可能需要 1-3 分钟，具体取决于网络速度。请稍候...${NC}"
+    fi
+    
+    # Show real-time progress during Docker build to avoid appearing frozen
+    docker compose build 2>&1 | while IFS= read -r line; do
+        # Show step progress and important messages
+        if echo "$line" | grep -qE "(Step|#[0-9]|Successfully|ERROR|DONE|downloading|extracting)"; then
+            echo "$line"
+        fi
+    done
+    
+    # Check if build succeeded
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Docker build failed" || echo "Docker 构建失败")${NC}"
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Try native mode: re-run script and select option 2" || echo "尝试原生模式：重新运行脚本并选择选项 2")${NC}"
+        exit 1
+    fi
+    
+    echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Image built successfully" || echo "镜像构建成功")${NC}"
     
     echo -e "${YELLOW}Step 2/2: Starting container / 步骤 2/2: 启动容器${NC}"
     docker compose up -d
@@ -1122,6 +1178,49 @@ print_instructions() {
     if [ "$LANG_CHOICE" = "en" ]; then
         cat <<'EOF'
 
+0. How Prism-DNS Works (Working Principle):
+   ┌─────────────────────────────────────────────────────────┐
+   │  User Device → Landing Node (Japan) → Internet         │
+   │       ↓ (DNS query for netflix.com)                    │
+   │  Landing Node asks Unlock Server (HK) for DNS          │
+   │       ↓ (DNS returns Unlock Server IP)                 │
+   │  Landing Node connects to Unlock Server IP             │
+   │       ↓ (SNI Proxy on Unlock Server)                   │
+   │  Unlock Server forwards to Real Netflix                │
+   │       ↓ (Unlock Server has native HK IP)               │
+   │  Netflix sees Hong Kong IP, not Japan IP! ✓            │
+   └─────────────────────────────────────────────────────────┘
+   
+   Key Components:
+   a) DNS Hijacking: DNS queries for unlock domains (netflix.com, 
+      openai.com, etc.) are sent to unlock server instead of 
+      public DNS (1.1.1.1)
+   b) Unlock Server Returns Its Own IP: When landing node asks 
+      "what is netflix.com?", unlock server replies with its own 
+      IP address instead of real Netflix IP
+   c) SNI Proxy: When landing node connects to "Netflix" (actually 
+      unlock server IP), SNI proxy forwards the connection to real 
+      Netflix, using unlock server's native IP
+   d) Result: Netflix sees unlock server's Hong Kong IP, not 
+      landing server's Japan IP
+
+   Why Your Setup Shows Landing Location:
+   - If you still see Japan location after setup, it means:
+     ✗ DNS queries are NOT going to unlock server (check DNS config)
+     ✗ Route rules are NOT matching unlock domains (check JSON config)
+     ✗ Firewall is blocking traffic (check ports 53/80/443)
+     ✗ Node was not restarted after config change
+   
+   Complete Traffic Flow for Unlock:
+   1. User opens Netflix
+   2. Landing node needs to resolve netflix.com
+   3. DNS rules in JSON route query to unlock server (not 1.1.1.1)
+   4. Unlock server returns its own IP: HK_IP
+   5. Landing node connects to HK_IP (thinks it's Netflix)
+   6. Route rules match netflix.com domain → use direct outbound
+   7. SNI proxy on unlock server forwards to real Netflix
+   8. Netflix sees Hong Kong IP ✓
+
 1. Geographic Location Requirements:
    ✓ Unlock server and landing server [DO NOT NEED] to be in the same region
    - Unlock server: Needs native IP for target services (HK/SG/US etc.)
@@ -1160,10 +1259,21 @@ EOF
      - ChatGPT: https://chat.openai.com
      - Netflix: https://www.netflix.com
      - TikTok: Open TikTok APP and check content
-   Method 3 - Check DNS resolution:
+   Method 3 - Check DNS resolution (MOST IMPORTANT!):
 EOF
         echo -e "     ${SKY}nslookup openai.com ${FINAL_IP}${NC}"
         echo -e "     (Should return: ${YELLOW}${FINAL_IP}${NC})"
+        cat <<'EOF'
+     This test confirms DNS hijacking is working correctly.
+     If it returns real OpenAI IP instead of unlock server IP,
+     the DNS configuration has a problem.
+   
+   Method 4 - Test from landing server:
+     After applying JSON config and restarting node, connect to
+     the landing node from your device, then:
+EOF
+        echo -e "     ${SKY}curl -I https://www.netflix.com${NC}"
+        echo "     Check if connection succeeds and shows HK region content"
         cat <<'EOF'
 
 5. Common Management Commands:
@@ -1182,6 +1292,48 @@ EOF
         echo -e "   Redeploy: ${SKY}bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)${NC}"
     else
         cat <<'EOF'
+
+0. Prism-DNS 工作原理说明：
+   ┌─────────────────────────────────────────────────────────┐
+   │  用户设备 → 落地节点(日本) → 互联网                    │
+   │       ↓ (DNS 查询 netflix.com)                         │
+   │  落地节点向解锁机(香港)查询 DNS                        │
+   │       ↓ (DNS 返回解锁机 IP)                            │
+   │  落地节点连接到解锁机 IP                               │
+   │       ↓ (解锁机上的 SNI 代理)                          │
+   │  解锁机转发到真实的 Netflix                            │
+   │       ↓ (解锁机有香港原生 IP)                          │
+   │  Netflix 看到的是香港 IP，不是日本 IP! ✓              │
+   └─────────────────────────────────────────────────────────┘
+   
+   核心组件说明：
+   a) DNS 劫持：需要解锁的域名(netflix.com、openai.com等)
+      的 DNS 查询会被发送到解锁机，而不是公共 DNS (1.1.1.1)
+   b) 解锁机返回自己的 IP：当落地节点询问"netflix.com 的 
+      IP 是什么"时，解锁机回答自己的 IP，而不是真实的 
+      Netflix IP
+   c) SNI 代理：当落地节点连接到"Netflix"(实际是解锁机IP)
+      时，SNI 代理会将连接转发到真实的 Netflix，使用解锁
+      机的原生 IP
+   d) 最终效果：Netflix 看到的是解锁机的香港 IP，而不是
+      落地机的日本 IP
+
+   为什么您的配置后还是显示落地地区：
+   - 如果配置后还显示日本地区，说明：
+     ✗ DNS 查询没有发送到解锁机 (检查 DNS 配置)
+     ✗ 路由规则没有匹配解锁域名 (检查 JSON 配置)
+     ✗ 防火墙阻止了流量 (检查 53/80/443 端口)
+     ✗ 节点配置修改后没有重启
+   
+   完整的解锁流量走向：
+   1. 用户打开 Netflix
+   2. 落地节点需要解析 netflix.com
+   3. JSON 中的 DNS 规则将查询路由到解锁机 (不是 1.1.1.1)
+   4. 解锁机返回自己的 IP: HK_IP
+   5. 落地节点连接到 HK_IP (以为是 Netflix)
+   6. 路由规则匹配 netflix.com 域名 → 使用 direct 出站
+   7. 解锁机上的 SNI 代理转发到真实的 Netflix
+   8. Netflix 看到香港 IP ✓
 
 1. 地理位置要求：
    ✓ 解锁机和落地机【不需要】在同一地区
@@ -1221,10 +1373,21 @@ EOF
      - ChatGPT: https://chat.openai.com
      - Netflix: https://www.netflix.com
      - TikTok: 打开 TikTok APP 查看内容
-   方法3 - 检查 DNS 解析:
+   方法3 - 检查 DNS 解析 (最重要!):
 EOF
         echo -e "     ${SKY}nslookup openai.com ${FINAL_IP}${NC}"
         echo -e "     (应该返回: ${YELLOW}${FINAL_IP}${NC})"
+        cat <<'EOF'
+     这个测试确认 DNS 劫持是否正常工作。
+     如果返回的是真实的 OpenAI IP 而不是解锁机 IP，
+     说明 DNS 配置有问题。
+   
+   方法4 - 从落地机测试:
+     应用 JSON 配置并重启节点后，从你的设备连接到
+     落地节点，然后执行：
+EOF
+        echo -e "     ${SKY}curl -I https://www.netflix.com${NC}"
+        echo "     检查连接是否成功，是否显示香港地区内容"
         cat <<'EOF'
 
 5. 常用管理命令：
