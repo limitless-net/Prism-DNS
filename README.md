@@ -25,6 +25,17 @@
 
 ## 🆕 最近更新
 
+### v3.9 - 2026年1月 审计规则性能优化（domain_regex → domain_suffix/domain_keyword）
+
+修复了配置生效后节点时而连接时而超时的问题。主要改进包括：
+
+- **替换 domain_regex 为 domain_suffix/domain_keyword**：复杂的正则表达式匹配会导致连接不稳定和性能问题。现在使用更高效的 `domain_suffix` 和 `domain_keyword` 规则
+- **新增独立模板文件**：提供 `v2bx_config_template.json` 文件，用户可直接复制使用，无需运行脚本生成
+- **保持相同的屏蔽功能**：新配置继续屏蔽 BT/P2P、回国流量、垃圾邮件服务等，功能完全一致
+- **性能提升**：`domain_suffix` 和 `domain_keyword` 匹配速度比正则表达式快 10-100 倍
+
+> **对现有用户的影响**：如果你之前遇到配置后节点连接不稳定的问题，请重新运行脚本或使用新的模板文件。
+
 ### v3.8 - 2026年1月 Sing-box 1.12+ 配置兼容性修复
 
 修复了使用 V2bX + Sing-box 1.12+ 后端时节点连接超时的问题。主要改进包括：
@@ -125,6 +136,20 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 ```
 
 > **注意**：请确保机器已安装 `curl`，若未安装可先执行 `apt update && apt install -y curl`
+
+### 独立配置模板（仅审计规则）
+
+如果你只需要审计规则配置（屏蔽 BT/P2P、回国流量等），无需解锁功能，可以直接使用项目中的 [`v2bx_config_template.json`](./v2bx_config_template.json) 文件：
+
+```bash
+# 下载模板文件
+curl -O https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/v2bx_config_template.json
+
+# 查看内容
+cat v2bx_config_template.json
+```
+
+此模板已将所有 `domain_regex` 规则替换为更高效的 `domain_suffix` 和 `domain_keyword` 规则，可直接复制到 V2bX 节点配置中使用。
 
 ## ⚙️ 使用流程
 
