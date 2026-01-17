@@ -112,9 +112,9 @@ check_port_availability() {
         local port_status=""
         
         if command -v ss &> /dev/null; then
-            port_status=$(ss -tuln 2>/dev/null | grep -E ":${port}([[:space:]]|$)")
+            port_status=$(ss -tuln 2>/dev/null | grep -E "(::|0\.0\.0\.0|\\*):${port}\\b")
         elif command -v netstat &> /dev/null; then
-            port_status=$(netstat -tuln 2>/dev/null | grep -E ":${port}([[:space:]]|$)")
+            port_status=$(netstat -tuln 2>/dev/null | grep -E "(::|0\.0\.0\.0|\\*):${port}\\b")
         fi
         
         if [ -n "$port_status" ]; then
@@ -125,7 +125,8 @@ check_port_availability() {
             if command -v lsof &> /dev/null; then
                 lsof -i :$port 2>/dev/null | grep LISTEN | awk '{print "  "$1" (PID: "$2")"}'
             elif command -v ss &> /dev/null; then
-                ss -tlnp 2>/dev/null | grep ":$port" | awk -F'"' '{print "  "$2}'
+                # Extract process info from ss output, handling different formats
+                ss -tlnp 2>/dev/null | grep ":$port" | sed 's/.*users:((\([^)]*\)).*/  \1/' | head -1
             fi
         else
             echo -e "${GREEN}✓ $(txt port_available "$port")${NC}"
@@ -339,8 +340,8 @@ address=/hbogo.com/$FINAL_IP"
     
     read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter option [1-6]: " || echo "请输入选项 [1-6]: ")" MODE_CHOICE
 
-    mkdir -p $WORK_DIR
-    cd $WORK_DIR || exit 1
+    mkdir -p "$WORK_DIR"
+    cd "$WORK_DIR" || exit 1
     echo "" > dnsmasq.conf
 
     case $MODE_CHOICE in
@@ -847,8 +848,8 @@ EOF
 # Main execution flow / 主流程
 main() {
     # Create working directory with secure permissions
-    mkdir -p $WORK_DIR
-    chmod 755 $WORK_DIR 2>/dev/null
+    mkdir -p "$WORK_DIR"
+    chmod 755 "$WORK_DIR" 2>/dev/null
     
     select_language
     check_port_availability
