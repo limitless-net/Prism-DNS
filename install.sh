@@ -355,6 +355,13 @@ generate_json() {
     echo -e "功能: 审计屏蔽 + 选定解锁规则 + 兼容新版核心"
     echo -e "${YELLOW}"
 
+    # 路由规则说明:
+    # 1. DNS 流量发送到 dns-out
+    # 2. 私有 IP 流量被屏蔽
+    # 3. 审计规则匹配的流量被屏蔽 (BT、回国流量等)
+    # 4. 解锁域名流量走 direct (DNS 已劫持解析到解锁服务器，此处路由放行)
+    # 5. 其他所有流量走 direct (默认兜底规则，确保正常流量不被遗漏)
+
     cat <<EOF
 {
   "log": {
@@ -382,11 +389,15 @@ generate_json() {
         "server": "my_private_unlock"
       }
     ],
-    "strategy": "ipv4_only"
+    "strategy": "prefer_ipv4"
   },
   "inbounds": [],
   "outbounds": [
-    { "tag": "direct", "type": "direct" },
+    {
+      "tag": "direct",
+      "type": "direct",
+      "domain_strategy": "prefer_ipv4"
+    },
     { "tag": "block", "type": "block" },
     { "tag": "dns-out", "type": "dns" }
   ],
@@ -425,6 +436,9 @@ generate_json() {
         "domain_suffix": [
           ${FINAL_JSON_LIST}
         ],
+        "outbound": "direct"
+      },
+      {
         "outbound": "direct"
       }
     ],
