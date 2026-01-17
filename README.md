@@ -72,6 +72,114 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 - **端口占用**：本脚本需要占用解锁机的 `80`, `443`, `53` 端口。如果该机器同时运行了节点程序，请务必将节点端口改为 `8443`、`2053` 或其他非标准端口。
 - **系统支持**：支持 Debian 10+, Ubuntu 20.04+, CentOS 7+。
 - **防火墙**：脚本会自动配置 `ufw` 或 `iptables`。如果你使用的是 AWS、阿里云等有外部安全组的机器，请务必在云厂商控制台同步放行 `53/udp`, `53/tcp`, `80/tcp`, `443/tcp`。
+- **地理位置**：解锁机和落地机【不需要】在同一地区。例如：解锁机在香港，落地机可以在日本、美国或任何其他地区。
+
+## 🔍 故障排查
+
+### 配置后无法上网
+
+如果应用配置后发现无法访问任何网站，请按以下步骤排查：
+
+1. **检查配置替换方式**
+   - 确保你是【完全替换】了原有的 JSON 配置，而不是追加
+   - V2bX/NodePass 配置框应该只包含脚本输出的 JSON，不要保留旧配置
+
+2. **检查防火墙设置**
+   - 在解锁机上确认已添加落地机 IP 到白名单
+   - 检查云厂商安全组规则，确保以下端口对落地机 IP 开放：
+     - `53/udp` - DNS 查询
+     - `53/tcp` - DNS 查询 (TCP)
+     - `80/tcp` - HTTP 代理
+     - `443/tcp` - HTTPS 代理
+
+3. **验证服务状态**
+   ```bash
+   # 在解锁机上执行
+   docker ps                    # 确认容器正在运行
+   docker logs dns_unlock       # 查看服务日志
+   netstat -tuln | grep -E '(:53|:80|:443)'  # 确认端口监听
+   ```
+
+4. **测试 DNS 解析**
+   ```bash
+   # 从落地机测试（将 UNLOCK_IP 替换为你的解锁机 IP）
+   nslookup openai.com UNLOCK_IP
+   # 应该返回解锁机的 IP 地址
+   ```
+
+5. **检查节点重启**
+   - 修改配置后必须重启节点才能生效
+   - 在 V2bX/NodePass 后台找到对应节点，点击重启
+
+### 解锁不生效
+
+如果可以上网但解锁不生效（如无法访问 Netflix、ChatGPT 等）：
+
+1. **确认解锁机 IP 质量**
+   - 在解锁机上直接测试目标服务
+   - 例如：`curl -I https://www.netflix.com`
+   - 确保解锁机本身能够访问这些服务
+
+2. **检查 DNS 劫持**
+   ```bash
+   # 在落地机上测试
+   nslookup netflix.com 你的解锁机IP
+   # 应该返回解锁机 IP，而不是 Netflix 真实 IP
+   ```
+
+3. **查看代理日志**
+   ```bash
+   # 在解锁机上查看实时流量
+   docker logs -f dns_unlock
+   # 访问目标服务时应该能看到连接日志
+   ```
+
+4. **验证选择的模式**
+   - 确认你在脚本中选择的模式包含你想解锁的服务
+   - 例如：只选择了 "ChatGPT 专用" 模式无法解锁 Netflix
+   - 建议使用 "超级全家桶" 模式进行全面解锁
+
+### 常见问题
+
+**Q: 解锁机和落地机需要在同一地区吗？**
+A: 不需要。解锁机需要在有原生 IP 的地区（如美国、香港等），落地机可以在任何地区。
+
+**Q: 可以用多个落地机连接同一个解锁机吗？**
+A: 可以。在配置防火墙白名单时，输入多个落地机 IP（空格分隔）即可。
+
+**Q: 如何验证解锁是否正常工作？**
+A: 
+- 查看日志：`docker logs -f dns_unlock`
+- DNS 测试：`nslookup openai.com 你的解锁机IP`
+- 实际访问：连接落地节点后访问 Netflix、ChatGPT 等服务
+
+**Q: 修改了解锁模式如何更新？**
+A: 重新运行安装脚本，选择新的模式，然后更新落地机的配置并重启节点。
+
+**Q: 可以在已有节点的机器上部署解锁服务吗？**
+A: 可以，但需要将节点端口改为非标准端口（如 8443），因为解锁服务需要占用 80 和 443 端口。
+
+## 🔧 管理命令
+
+```bash
+# 查看服务状态
+docker ps
+
+# 查看实时日志
+docker logs -f dns_unlock
+
+# 重启服务
+cd /root/dns_unlock && docker compose restart
+
+# 停止服务
+cd /root/dns_unlock && docker compose down
+
+# 重新部署（会保留现有配置）
+cd /root/dns_unlock && docker compose up -d --build
+
+# 完全重新安装
+bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)
+```
 
 ## 🤝 贡献与反馈
 
