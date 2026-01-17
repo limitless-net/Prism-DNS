@@ -43,7 +43,8 @@ validate_ip() {
     if [[ "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
         local octet
         for octet in "${BASH_REMATCH[@]:1}"; do
-            if [ "$octet" -gt 255 ]; then
+            # Remove leading zeros to avoid octal interpretation, use 10# to force decimal
+            if [ "$((10#$octet))" -gt 255 ]; then
                 return 1
             fi
         done
@@ -53,8 +54,8 @@ validate_ip() {
     # IPv6 validation: basic check for valid characters and format
     # Accept common IPv6 formats including compressed notation
     if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
-        # Must contain at least one colon and not be only colons
-        if [[ "$ip" == *:* ]] && [[ "$ip" != *[0-9a-fA-F]* || "$ip" =~ [0-9a-fA-F] ]]; then
+        # Must contain at least one colon
+        if [[ "$ip" == *:* ]]; then
             # Reject if only colons (like ":::" or "::::")
             if [[ "$ip" =~ ^:+$ ]]; then
                 return 1
