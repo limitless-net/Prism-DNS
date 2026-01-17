@@ -112,9 +112,9 @@ check_port_availability() {
         local port_status=""
         
         if command -v ss &> /dev/null; then
-            port_status=$(ss -tuln 2>/dev/null | grep -E ":${port}[[:space:]]")
+            port_status=$(ss -tuln 2>/dev/null | grep -E ":${port}([[:space:]]|$)")
         elif command -v netstat &> /dev/null; then
-            port_status=$(netstat -tuln 2>/dev/null | grep -E ":${port}[[:space:]]")
+            port_status=$(netstat -tuln 2>/dev/null | grep -E ":${port}([[:space:]]|$)")
         fi
         
         if [ -n "$port_status" ]; then
@@ -846,7 +846,9 @@ EOF
 
 # Main execution flow / 主流程
 main() {
-    chmod 777 $WORK_DIR -R 2>/dev/null
+    # Create working directory with secure permissions
+    mkdir -p $WORK_DIR
+    chmod 755 $WORK_DIR 2>/dev/null
     
     select_language
     check_port_availability
