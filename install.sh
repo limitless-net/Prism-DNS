@@ -1302,7 +1302,7 @@ print_instructions() {
    3. DNS rules in JSON route query to unlock server (not 1.1.1.1)
    4. Unlock server returns its own IP: HK_IP
    5. Landing node connects to HK_IP (thinks it's Netflix)
-   6. Route rules match netflix.com domain → use unlock outbound
+   6. Route rules match netflix.com domain → direct outbound to unlock IP
    7. SNI proxy on unlock server forwards to real Netflix
    8. Netflix sees Hong Kong IP ✓
 
@@ -1416,7 +1416,7 @@ EOF
    3. JSON 中的 DNS 规则将查询路由到解锁机 (不是 1.1.1.1)
    4. 解锁机返回自己的 IP: HK_IP
    5. 落地节点连接到 HK_IP (以为是 Netflix)
-   6. 路由规则匹配 netflix.com 域名 → 使用 unlock 出站
+   6. 路由规则匹配 netflix.com 域名 → 通过 direct 出站直连解锁机 IP
    7. 解锁机上的 SNI 代理转发到真实的 Netflix
    8. Netflix 看到香港 IP ✓
 
