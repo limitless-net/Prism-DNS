@@ -1277,6 +1277,7 @@ uninstall_service() {
     local has_native=false
     local docker_container_exists=false
     local docker_image_exists=false
+    local workdir_removed=false
     
     # Check for Docker installation
     if command -v docker &> /dev/null; then
@@ -1318,6 +1319,7 @@ uninstall_service() {
         if [ -d "$WORK_DIR" ]; then
             echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing configuration files..." || echo "删除配置文件...")${NC}"
             rm -rf "$WORK_DIR"
+            workdir_removed=true
             echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Configuration files removed" || echo "配置文件已删除")${NC}"
         fi
     fi
@@ -1363,6 +1365,7 @@ uninstall_service() {
         # Remove working directory
         if [ -d "$WORK_DIR" ]; then
             rm -rf "$WORK_DIR"
+            workdir_removed=true
         fi
         
         # Note about packages
@@ -1391,7 +1394,7 @@ uninstall_service() {
             echo "Removed components:"
             [ "$has_docker" = true ] && echo "  - Docker container and image"
             [ "$has_native" = true ] && echo "  - Native service configuration"
-            echo "  - Configuration files in $WORK_DIR"
+            [ "$workdir_removed" = true ] && echo "  - Configuration files in $WORK_DIR"
             echo ""
             echo "Note: Firewall rules were not modified."
             echo "If you configured firewall rules, you may want to review and clean them up manually."
@@ -1399,7 +1402,7 @@ uninstall_service() {
             echo "已删除的组件："
             [ "$has_docker" = true ] && echo "  - Docker 容器和镜像"
             [ "$has_native" = true ] && echo "  - 原生服务配置"
-            echo "  - $WORK_DIR 中的配置文件"
+            [ "$workdir_removed" = true ] && echo "  - $WORK_DIR 中的配置文件"
             echo ""
             echo "注意：防火墙规则未被修改。"
             echo "如果您配置了防火墙规则，可能需要手动检查并清理它们。"
