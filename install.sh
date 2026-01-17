@@ -1,8 +1,9 @@
+cat > install.sh << 'EOF'
 #!/bin/bash
 
 # ==========================================================
-#   V2bX 专用解锁服务搭建脚本 (V3.0)
-#   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.1 镜像修复版)
+#   更新日志：修复 Docker 镜像拉取失败问题
 # ==========================================================
 
 RED='\033[0;31m'
@@ -189,11 +190,11 @@ address=/hbogo.com/$FINAL_IP"
             ;;
     esac
 
-    # 生成 docker-compose
+    # 生成 docker-compose (使用 suikaca 镜像)
     cat > docker-compose.yml <<EOL
 services:
   sniproxy:
-    image: myxuchangbin/dnsmasq_sniproxy:latest
+    image: suikaca/dnsmasq_sniproxy:latest
     container_name: dns_unlock
     restart: always
     network_mode: host
@@ -205,6 +206,13 @@ EOL
     echo -e "${YELLOW}正在重启服务...${NC}"
     docker compose down 2>/dev/null
     docker compose up -d
+    
+    if [ $? -eq 0 ]; then
+        echo -e "${GREEN}✅ 解锁服务启动成功！${NC}"
+    else
+        echo -e "${RED}❌ 启动失败，可能 Docker Hub 连接超时，请检查网络或配置镜像加速${NC}"
+        exit 1
+    fi
 }
 
 # 5. 配置白名单防火墙
@@ -244,7 +252,6 @@ generate_json() {
     echo -e "${GREEN}======================================================${NC}"
     echo -e "解锁 IP : ${YELLOW}$FINAL_IP${NC}"
     echo -e "当前模式: ${SKY}$TYPE_NAME${NC}"
-    echo -e "功能: 审计屏蔽 + 选定解锁规则 + 兼容新版核心"
     echo -e "${YELLOW}"
 
     cat <<EOF
