@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.1 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.2 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置
-#   Prism-DNS Unlock Service Setup Script (V3.1)
+#   Prism-DNS Unlock Service Setup Script (V3.2)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config
 # ==========================================================
 
@@ -62,6 +62,15 @@ txt() {
         "port_check_pass")
             [ "$LANG_CHOICE" = "en" ] && echo "✓ All required ports are available" || echo "✓ 所有必需端口可用"
             ;;
+        "port_available")
+            [ "$LANG_CHOICE" = "en" ] && echo "Port $2: Available" || echo "端口 $2: 可用"
+            ;;
+        "tip_prefix")
+            [ "$LANG_CHOICE" = "en" ] && echo "Tip:" || echo "提示:"
+            ;;
+        "port_conflict_tip")
+            [ "$LANG_CHOICE" = "en" ] && echo "You may need to stop existing services or change their ports." || echo "您可能需要停止现有服务或更改它们的端口。"
+            ;;
         *)
             echo "$key"
             ;;
@@ -119,7 +128,7 @@ check_port_availability() {
                 ss -tlnp 2>/dev/null | grep ":$port" | awk -F'"' '{print "  "$2}'
             fi
         else
-            echo -e "${GREEN}✓ Port $port: Available${NC}" | sed "s/Port $port/端口 $port/" 
+            echo -e "${GREEN}✓ $(txt port_available "$port")${NC}"
         fi
     done
     
@@ -127,8 +136,7 @@ check_port_availability() {
     
     if [ "$port_conflict" = true ]; then
         echo -e "${YELLOW}$(txt port_conflict_warn)${NC}"
-        echo -e "${YELLOW}Tip: You may need to stop existing services or change their ports.${NC}" | \
-            sed "s/Tip:/提示:/" | sed "s/You may need.*/您可能需要停止现有服务或更改它们的端口。/"
+        echo -e "${YELLOW}$(txt tip_prefix) $(txt port_conflict_tip)${NC}"
         echo ""
         read -p "$(txt port_continue) " continue_install
         
