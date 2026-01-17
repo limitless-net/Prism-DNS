@@ -1,14 +1,34 @@
 {
   "log": {
-    "level": "info",
+    "level": "warning",
     "timestamp": true
   },
   "dns": {
     "servers": [
       {
+        "tag": "unlock_dns",
+        "address": "156.224.79.130",
+        "address_resolver": "local_dns",
+        "detour": "direct"
+      },
+      {
         "tag": "local_dns",
         "address": "1.1.1.1",
         "detour": "direct"
+      }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [
+          "netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net",
+          "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com",
+          "dssott.com", "bamgrid.com", "tiktok.com", "tiktokv.com",
+          "tiktokcdn.com", "byteoversea.com", "ibytedtos.com",
+          "ipstatp.com", "muscdn.com", "musical.ly",
+          "openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", 
+          "auth0.com", "sentry.io", "identrust.com", "stripe.com"
+        ],
+        "server": "unlock_dns"
       }
     ],
     "final": "local_dns",
@@ -29,12 +49,24 @@
     {
       "tag": "block",
       "type": "block"
+    },
+    {
+      "tag": "unlock",
+      "type": "direct",
+      "domain_resolver": {
+        "server": "unlock_dns",
+        "strategy": "prefer_ipv4"
+      }
     }
   ],
   "route": {
     "rules": [
       {
         "protocol": "dns",
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": ["156.224.79.130/32"],
         "outbound": "direct"
       },
       {
@@ -63,6 +95,18 @@
           "pokemail.net", "spam4.me", "bccto.me", "chacuo.net"
         ],
         "outbound": "block"
+      },
+      {
+        "domain_suffix": [
+          "netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net",
+          "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com",
+          "dssott.com", "bamgrid.com", "tiktok.com", "tiktokv.com",
+          "tiktokcdn.com", "byteoversea.com", "ibytedtos.com",
+          "ipstatp.com", "muscdn.com", "musical.ly",
+          "openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", 
+          "auth0.com", "sentry.io", "identrust.com", "stripe.com"
+        ],
+        "outbound": "direct"
       },
       {
         "ip_is_private": true,
