@@ -324,22 +324,219 @@ install_docker() {
         spinner $pid "Downloading and installing Docker / 下载并安装 Docker..."
         wait $pid
         
+        # Verify Docker was installed successfully
+        if ! command -v docker &> /dev/null; then
+            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Docker installation failed. Check /tmp/docker_install.log for details." || echo "Docker 安装失败。请查看 /tmp/docker_install.log 获取详情。")${NC}"
+            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Tip: You can try the native mode (without Docker) for low-resource VPS by re-running the script." || echo "提示：对于低配 VPS，您可以重新运行脚本并选择原生模式（无需 Docker）。")${NC}"
+            exit 1
+        fi
+        
         systemctl enable docker > /dev/null 2>&1
         systemctl start docker
+        
+        # Verify Docker service is running
+        if ! systemctl is-active --quiet docker 2>/dev/null; then
+            echo -e "${YELLOW}⚠ $([ "$LANG_CHOICE" = "en" ] && echo "Docker service may not have started properly" || echo "Docker 服务可能未正常启动")${NC}"
+        fi
+        
         echo -e "${GREEN}✓ Docker installed successfully / Docker 安装成功${NC}"
     else
         echo -e "${GREEN}✓ Docker already installed / Docker 已安装${NC}"
     fi
     
-    if ! command -v docker-compose &> /dev/null; then
+    # Check for docker compose (v2) or docker-compose (v1)
+    if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
         echo -e "${YELLOW}Installing Docker Compose / 正在安装 Docker Compose...${NC}"
         apt-get install -y docker-compose-plugin 2>/dev/null || apt-get install -y docker-compose 2>/dev/null
+        
+        # Verify Docker Compose was installed
+        if ! docker compose version &> /dev/null && ! command -v docker-compose &> /dev/null; then
+            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Docker Compose installation failed" || echo "Docker Compose 安装失败")${NC}"
+            exit 1
+        fi
         echo -e "${GREEN}✓ Docker Compose installed / Docker Compose 已安装${NC}"
     else
         echo -e "${GREEN}✓ Docker Compose already installed / Docker Compose 已安装${NC}"
     fi
     
     sleep 1
+}
+
+# Global variable for deployment mode
+DEPLOY_MODE="docker"
+
+# 4.5. Select deployment mode / 选择部署模式
+select_deploy_mode() {
+    echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Select Deployment Mode${NC}" || echo -e "${SKY}  选择部署模式${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    if [ "$LANG_CHOICE" = "en" ]; then
+        echo "Please select deployment mode:"
+        echo "1. Docker Mode (Recommended) - Isolated container, easy to manage"
+        echo "2. Native Mode (Low Resource) - Direct installation, lower memory usage (~50MB vs ~150MB)"
+        echo ""
+        echo -e "${YELLOW}Tip: Use Native Mode if Docker installation fails or on low-memory VPS (< 512MB RAM)${NC}"
+    else
+        echo "请选择部署模式："
+        echo "1. Docker 模式 (推荐) - 容器隔离，便于管理"
+        echo "2. 原生模式 (低资源) - 直接安装，内存占用更低 (~50MB vs ~150MB)"
+        echo ""
+        echo -e "${YELLOW}提示：如果 Docker 安装失败或者 VPS 内存较小（< 512MB），建议使用原生模式${NC}"
+    fi
+    
+    read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter option [1-2] (default: 1): " || echo "请输入选项 [1-2] (默认: 1): ")" mode_input
+    
+    case $mode_input in
+        2)
+            DEPLOY_MODE="native"
+            echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected: Native Mode" || echo "已选择: 原生模式")${NC}"
+            ;;
+        *)
+            DEPLOY_MODE="docker"
+            echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected: Docker Mode" || echo "已选择: Docker 模式")${NC}"
+            ;;
+    esac
+    
+    sleep 1
+}
+
+# Install native dependencies (dnsmasq + sniproxy) / 安装原生依赖
+install_native() {
+    echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Installing Native Dependencies${NC}" || echo -e "${SKY}  安装原生依赖${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Updating package list..." || echo "更新软件包列表...")${NC}"
+    apt-get update > /dev/null 2>&1
+    
+    # Install dnsmasq
+    if ! command -v dnsmasq &> /dev/null; then
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Installing dnsmasq..." || echo "正在安装 dnsmasq...")${NC}"
+        apt-get install -y dnsmasq > /dev/null 2>&1
+        if ! command -v dnsmasq &> /dev/null; then
+            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to install dnsmasq" || echo "dnsmasq 安装失败")${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✓ dnsmasq installed / dnsmasq 已安装${NC}"
+    else
+        echo -e "${GREEN}✓ dnsmasq already installed / dnsmasq 已安装${NC}"
+    fi
+    
+    # Install sniproxy
+    if ! command -v sniproxy &> /dev/null; then
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Installing sniproxy..." || echo "正在安装 sniproxy...")${NC}"
+        apt-get install -y sniproxy > /dev/null 2>&1
+        if ! command -v sniproxy &> /dev/null; then
+            echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to install sniproxy" || echo "sniproxy 安装失败")${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✓ sniproxy installed / sniproxy 已安装${NC}"
+    else
+        echo -e "${GREEN}✓ sniproxy already installed / sniproxy 已安装${NC}"
+    fi
+    
+    sleep 1
+}
+
+# Deploy service in native mode / 原生模式部署服务
+deploy_service_native() {
+    echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Deploying Native Services${NC}" || echo -e "${SKY}  部署原生服务${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    # Stop existing services
+    echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Stopping existing services..." || echo "停止现有服务...")${NC}"
+    systemctl stop dnsmasq 2>/dev/null || true
+    systemctl stop sniproxy 2>/dev/null || true
+    
+    # Configure dnsmasq
+    echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Configuring dnsmasq..." || echo "配置 dnsmasq...")${NC}"
+    
+    # Backup original config if exists
+    if [ -f /etc/dnsmasq.conf ] && [ ! -f /etc/dnsmasq.conf.bak ]; then
+        cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak
+    fi
+    
+    # Create dnsmasq main config
+    cat > /etc/dnsmasq.conf <<EOF
+# Prism-DNS Configuration
+port=53
+no-resolv
+server=8.8.8.8
+server=8.8.4.4
+conf-dir=/etc/dnsmasq.d/,*.conf
+no-hosts
+cache-size=1000
+EOF
+    
+    # Copy unlock rules to dnsmasq.d
+    mkdir -p /etc/dnsmasq.d
+    cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
+    
+    # Configure sniproxy
+    echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Configuring sniproxy..." || echo "配置 sniproxy...")${NC}"
+    
+    mkdir -p /var/log/sniproxy
+    chmod 755 /var/log/sniproxy
+    
+    cat > /etc/sniproxy.conf <<EOF
+user daemon
+pidfile /var/run/sniproxy.pid
+
+error_log {
+    filename /var/log/sniproxy/error.log
+    priority notice
+}
+
+access_log {
+    filename /var/log/sniproxy/access.log
+}
+
+listen 80 {
+    proto http
+    table http_hosts
+}
+
+listen 443 {
+    proto tls
+    table https_hosts
+}
+
+table http_hosts {
+    .* *:80
+}
+
+table https_hosts {
+    .* *:443
+}
+EOF
+    
+    # Enable and start services
+    echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Starting services..." || echo "启动服务...")${NC}"
+    
+    systemctl enable dnsmasq > /dev/null 2>&1
+    systemctl restart dnsmasq
+    
+    if ! systemctl is-active --quiet dnsmasq; then
+        echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to start dnsmasq" || echo "dnsmasq 启动失败")${NC}"
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Check logs: journalctl -u dnsmasq" || echo "查看日志: journalctl -u dnsmasq")${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ dnsmasq started / dnsmasq 已启动${NC}"
+    
+    systemctl enable sniproxy > /dev/null 2>&1
+    systemctl restart sniproxy
+    
+    if ! systemctl is-active --quiet sniproxy; then
+        echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Failed to start sniproxy" || echo "sniproxy 启动失败")${NC}"
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Check logs: journalctl -u sniproxy" || echo "查看日志: journalctl -u sniproxy")${NC}"
+        exit 1
+    fi
+    echo -e "${GREEN}✓ sniproxy started / sniproxy 已启动${NC}"
+    
+    echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Native services deployed successfully" || echo "原生服务部署成功")${NC}"
+    sleep 2
 }
 
 # 5. Select unlock mode & deploy service / 选择解锁模式 & 部署服务
@@ -483,6 +680,12 @@ address=/hbogo.com/$FINAL_IP"
     echo -e "\n${GREEN}✓ Selected mode / 已选择模式: ${TYPE_NAME}${NC}\n"
     sleep 1
 
+    # If native mode, deploy using native method
+    if [ "$DEPLOY_MODE" = "native" ]; then
+        deploy_service_native
+        return
+    fi
+
     # Download Dockerfile / 下载 Dockerfile
     echo -e "${SKY}═══════════════════════════════════════════════${NC}"
     [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Building Docker Container${NC}" || echo -e "${SKY}  构建 Docker 容器${NC}"
@@ -606,14 +809,41 @@ verify_services() {
         return 1
     fi
     
-    # Check container status / 检查容器状态
-    echo -e "${YELLOW}[1/3] Checking Docker container / 检查 Docker 容器...${NC}"
-    if docker ps | grep -q "dns_unlock"; then
-        echo -e "${GREEN}✓ Docker container running / Docker 容器运行正常${NC}"
+    # Check service status based on deploy mode
+    if [ "$DEPLOY_MODE" = "native" ]; then
+        # Native mode: Check systemd services
+        echo -e "${YELLOW}[1/3] $([ "$LANG_CHOICE" = "en" ] && echo "Checking native services..." || echo "检查原生服务...")${NC}"
+        
+        local services_ok=true
+        if systemctl is-active --quiet dnsmasq; then
+            echo -e "${GREEN}✓ dnsmasq service running / dnsmasq 服务运行正常${NC}"
+        else
+            echo -e "${RED}✗ dnsmasq service not running / dnsmasq 服务未运行${NC}"
+            echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Check logs: journalctl -u dnsmasq" || echo "请检查日志: journalctl -u dnsmasq")${NC}"
+            services_ok=false
+        fi
+        
+        if systemctl is-active --quiet sniproxy; then
+            echo -e "${GREEN}✓ sniproxy service running / sniproxy 服务运行正常${NC}"
+        else
+            echo -e "${RED}✗ sniproxy service not running / sniproxy 服务未运行${NC}"
+            echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Check logs: journalctl -u sniproxy" || echo "请检查日志: journalctl -u sniproxy")${NC}"
+            services_ok=false
+        fi
+        
+        if [ "$services_ok" = false ]; then
+            return 1
+        fi
     else
-        echo -e "${RED}✗ Docker container not running / Docker 容器未运行${NC}"
-        echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Check logs: docker logs dns_unlock" || echo "请检查日志: docker logs dns_unlock")${NC}"
-        return 1
+        # Docker mode: Check container status
+        echo -e "${YELLOW}[1/3] Checking Docker container / 检查 Docker 容器...${NC}"
+        if docker ps | grep -q "dns_unlock"; then
+            echo -e "${GREEN}✓ Docker container running / Docker 容器运行正常${NC}"
+        else
+            echo -e "${RED}✗ Docker container not running / Docker 容器未运行${NC}"
+            echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Check logs: docker logs dns_unlock" || echo "请检查日志: docker logs dns_unlock")${NC}"
+            return 1
+        fi
     fi
     
     # Check port listening / 检查端口监听
@@ -855,7 +1085,12 @@ EOF
 4. Verify Unlock is Working:
    Method 1 - Check unlock server logs:
 EOF
-        echo -e "     ${SKY}docker logs -f dns_unlock${NC}"
+        if [ "$DEPLOY_MODE" = "native" ]; then
+            echo -e "     ${SKY}journalctl -u dnsmasq -f${NC}"
+            echo -e "     ${SKY}journalctl -u sniproxy -f${NC}"
+        else
+            echo -e "     ${SKY}docker logs -f dns_unlock${NC}"
+        fi
         cat <<'EOF'
    Method 2 - Access test from client:
      - ChatGPT: https://chat.openai.com
@@ -869,10 +1104,17 @@ EOF
 
 5. Common Management Commands:
 EOF
-        echo -e "   View service status: ${SKY}docker ps${NC}"
-        echo -e "   View live logs: ${SKY}docker logs -f dns_unlock${NC}"
-        echo -e "   Restart service: ${SKY}cd $WORK_DIR && docker compose restart${NC}"
-        echo -e "   Stop service: ${SKY}cd $WORK_DIR && docker compose down${NC}"
+        if [ "$DEPLOY_MODE" = "native" ]; then
+            echo -e "   View service status: ${SKY}systemctl status dnsmasq sniproxy${NC}"
+            echo -e "   View live logs: ${SKY}journalctl -u dnsmasq -u sniproxy -f${NC}"
+            echo -e "   Restart service: ${SKY}systemctl restart dnsmasq sniproxy${NC}"
+            echo -e "   Stop service: ${SKY}systemctl stop dnsmasq sniproxy${NC}"
+        else
+            echo -e "   View service status: ${SKY}docker ps${NC}"
+            echo -e "   View live logs: ${SKY}docker logs -f dns_unlock${NC}"
+            echo -e "   Restart service: ${SKY}cd $WORK_DIR && docker compose restart${NC}"
+            echo -e "   Stop service: ${SKY}cd $WORK_DIR && docker compose down${NC}"
+        fi
         echo -e "   Redeploy: ${SKY}bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)${NC}"
     else
         cat <<'EOF'
@@ -904,7 +1146,12 @@ EOF
 4. 验证解锁是否生效：
    方法1 - 查看解锁机日志:
 EOF
-        echo -e "     ${SKY}docker logs -f dns_unlock${NC}"
+        if [ "$DEPLOY_MODE" = "native" ]; then
+            echo -e "     ${SKY}journalctl -u dnsmasq -f${NC}"
+            echo -e "     ${SKY}journalctl -u sniproxy -f${NC}"
+        else
+            echo -e "     ${SKY}docker logs -f dns_unlock${NC}"
+        fi
         cat <<'EOF'
    方法2 - 在客户端访问测试:
      - ChatGPT: https://chat.openai.com
@@ -918,10 +1165,17 @@ EOF
 
 5. 常用管理命令：
 EOF
-        echo -e "   查看服务状态: ${SKY}docker ps${NC}"
-        echo -e "   查看实时日志: ${SKY}docker logs -f dns_unlock${NC}"
-        echo -e "   重启服务: ${SKY}cd $WORK_DIR && docker compose restart${NC}"
-        echo -e "   停止服务: ${SKY}cd $WORK_DIR && docker compose down${NC}"
+        if [ "$DEPLOY_MODE" = "native" ]; then
+            echo -e "   查看服务状态: ${SKY}systemctl status dnsmasq sniproxy${NC}"
+            echo -e "   查看实时日志: ${SKY}journalctl -u dnsmasq -u sniproxy -f${NC}"
+            echo -e "   重启服务: ${SKY}systemctl restart dnsmasq sniproxy${NC}"
+            echo -e "   停止服务: ${SKY}systemctl stop dnsmasq sniproxy${NC}"
+        else
+            echo -e "   查看服务状态: ${SKY}docker ps${NC}"
+            echo -e "   查看实时日志: ${SKY}docker logs -f dns_unlock${NC}"
+            echo -e "   重启服务: ${SKY}cd $WORK_DIR && docker compose restart${NC}"
+            echo -e "   停止服务: ${SKY}cd $WORK_DIR && docker compose down${NC}"
+        fi
         echo -e "   重新部署: ${SKY}bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)${NC}"
     fi
     
@@ -943,7 +1197,15 @@ main() {
     select_language
     check_port_availability
     select_public_ip
-    install_docker
+    select_deploy_mode
+    
+    # Install dependencies based on deployment mode
+    if [ "$DEPLOY_MODE" = "native" ]; then
+        install_native
+    else
+        install_docker
+    fi
+    
     deploy_service
     set_firewall
     verify_services
