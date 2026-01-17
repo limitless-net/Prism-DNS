@@ -17,6 +17,70 @@ WORK_DIR="/root/dns_unlock"
 # Language selection (default: Chinese)
 LANG_CHOICE="zh"
 
+# Validate IP address format / 验证 IP 地址格式
+# Returns 0 for valid IP, 1 for invalid
+validate_ip() {
+    local ip="$1"
+    
+    # Remove leading/trailing whitespace
+    ip=$(echo "$ip" | tr -d '[:space:]')
+    
+    # Check for empty input
+    if [ -z "$ip" ]; then
+        return 1
+    fi
+    
+    # Check for dangerous characters (command injection prevention)
+    # Using case statement with shell globbing - only allow dots, colons, and hex digits
+    case "$ip" in
+        *[!.:0-9a-fA-F]*)
+            # Contains characters other than dots, colons, and hex digits
+            return 1
+            ;;
+    esac
+    
+    # IPv4 validation: must be exactly 4 octets of 0-255
+    if [[ "$ip" =~ ^([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})\.([0-9]{1,3})$ ]]; then
+        local octet
+        for octet in "${BASH_REMATCH[@]:1}"; do
+            if [ "$octet" -gt 255 ]; then
+                return 1
+            fi
+        done
+        return 0
+    fi
+    
+    # IPv6 validation: basic check for valid characters and format
+    # Accept common IPv6 formats including compressed notation
+    if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
+        # Must contain at least one colon and not be only colons
+        if [[ "$ip" == *:* ]] && [[ "$ip" != *[0-9a-fA-F]* || "$ip" =~ [0-9a-fA-F] ]]; then
+            # Reject if only colons (like ":::" or "::::")
+            if [[ "$ip" =~ ^:+$ ]]; then
+                return 1
+            fi
+            case "$ip" in
+                *::*::*)
+                    # Multiple double colons - invalid
+                    return 1
+                    ;;
+                *::*)
+                    # Single double colon - valid (compressed notation)
+                    return 0
+                    ;;
+                *)
+                    # No double colon - check for full format (must have at least one hex digit)
+                    if [[ "$ip" =~ ^[0-9a-fA-F]+:[0-9a-fA-F:]+$ ]]; then
+                        return 0
+                    fi
+                    ;;
+            esac
+        fi
+    fi
+    
+    return 1
+}
+
 # Select language / 选择语言
 select_language() {
     clear
@@ -159,20 +223,35 @@ select_public_ip() {
     [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Detecting Public IP Addresses${NC}" || echo -e "${SKY}  正在检测本机 IP${NC}"
     echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
     
+    # Use secure temporary files to prevent race conditions
+    local tmp_ipv4
+    local tmp_ipv6
+    tmp_ipv4=$(mktemp 2>/dev/null)
+    tmp_ipv6=$(mktemp 2>/dev/null)
+    
+    if [ -z "$tmp_ipv4" ] || [ -z "$tmp_ipv6" ]; then
+        # Clean up any partially created files
+        [ -n "$tmp_ipv4" ] && rm -f "$tmp_ipv4"
+        [ -n "$tmp_ipv6" ] && rm -f "$tmp_ipv6"
+        echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Error: Failed to create secure temporary files" || echo "错误: 无法创建安全的临时文件")${NC}"
+        exit 1
+    fi
+    
     # Detect IPs with spinner
-    (curl -4s --max-time 5 ifconfig.me 2>/dev/null > /tmp/ipv4_result) &
+    (curl -4s --max-time 5 ifconfig.me 2>/dev/null > "$tmp_ipv4") &
     local pid_v4=$!
     spinner $pid_v4 "Detecting IPv4 / 检测 IPv4 地址..."
     wait $pid_v4
-    IPV4=$(cat /tmp/ipv4_result 2>/dev/null)
+    IPV4=$(cat "$tmp_ipv4" 2>/dev/null)
     
-    (curl -6s --max-time 5 ifconfig.co 2>/dev/null > /tmp/ipv6_result) &
+    (curl -6s --max-time 5 ifconfig.co 2>/dev/null > "$tmp_ipv6") &
     local pid_v6=$!
     spinner $pid_v6 "Detecting IPv6 / 检测 IPv6 地址..."
     wait $pid_v6
-    IPV6=$(cat /tmp/ipv6_result 2>/dev/null)
+    IPV6=$(cat "$tmp_ipv6" 2>/dev/null)
     
-    rm -f /tmp/ipv4_result /tmp/ipv6_result
+    # Clean up temporary files
+    rm -f "$tmp_ipv4" "$tmp_ipv6"
 
     echo -e "\n${SKY}Detected IP addresses / 检测到以下 IP 地址：${NC}"
     if [ -n "$IPV4" ]; then 
@@ -212,6 +291,11 @@ select_public_ip() {
             [ "$LANG_CHOICE" = "en" ] && \
                 read -p "Enter IP address: " FINAL_IP || \
                 read -p "请输入 IP 地址: " FINAL_IP
+            # Validate manually entered IP address
+            if ! validate_ip "$FINAL_IP"; then
+                echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Invalid IP address format" || echo "无效的 IP 地址格式")${NC}"
+                exit 1
+            fi
             ;;
         *)
             echo -e "${YELLOW}Invalid option, using auto-detected IP / 选项错误，使用自动检测到的 IP${NC}"
@@ -459,20 +543,38 @@ set_firewall() {
     fi
 
     if [ -n "$CLIENT_IPS" ]; then
+        # Validate all IPs first to prevent partial configuration
+        local valid_ips=()
+        local has_invalid=false
+        
+        for ip in $CLIENT_IPS; do
+            if validate_ip "$ip"; then
+                valid_ips+=("$ip")
+            else
+                echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Invalid IP address: $ip (skipped)" || echo "无效的 IP 地址: $ip (已跳过)")${NC}"
+                has_invalid=true
+            fi
+        done
+        
+        if [ "$has_invalid" = true ] && [ ${#valid_ips[@]} -eq 0 ]; then
+            echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "No valid IP addresses provided" || echo "未提供有效的 IP 地址")${NC}"
+            return 1
+        fi
+        
         if command -v ufw &> /dev/null; then
             ufw allow 22/tcp > /dev/null 2>&1
-            for ip in $CLIENT_IPS; do
-                ufw allow from $ip to any port 53 > /dev/null 2>&1
-                ufw allow from $ip to any port 80 > /dev/null 2>&1
-                ufw allow from $ip to any port 443 > /dev/null 2>&1
+            for ip in "${valid_ips[@]}"; do
+                ufw allow from "$ip" to any port 53 > /dev/null 2>&1
+                ufw allow from "$ip" to any port 80 > /dev/null 2>&1
+                ufw allow from "$ip" to any port 443 > /dev/null 2>&1
                 echo -e "${GREEN}✓ Allowed (UFW) / 已放行 (UFW): $ip${NC}"
             done
         elif command -v iptables &> /dev/null; then
-            for ip in $CLIENT_IPS; do
-                iptables -I INPUT -s $ip -p udp --dport 53 -j ACCEPT
-                iptables -I INPUT -s $ip -p tcp --dport 53 -j ACCEPT
-                iptables -I INPUT -s $ip -p tcp --dport 80 -j ACCEPT
-                iptables -I INPUT -s $ip -p tcp --dport 443 -j ACCEPT
+            for ip in "${valid_ips[@]}"; do
+                iptables -I INPUT -s "$ip" -p udp --dport 53 -j ACCEPT
+                iptables -I INPUT -s "$ip" -p tcp --dport 53 -j ACCEPT
+                iptables -I INPUT -s "$ip" -p tcp --dport 80 -j ACCEPT
+                iptables -I INPUT -s "$ip" -p tcp --dport 443 -j ACCEPT
                 echo -e "${GREEN}✓ Allowed (iptables) / 已放行 (iptables): $ip${NC}"
             done
         fi
