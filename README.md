@@ -28,3 +28,43 @@
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/[YOUR_GITHUB_USERNAME]/[YOUR_REPO_NAME]/main/install.sh)
+(请确保机器已安装 curl，若未安装可先执行 apt update && apt install -y curl)
+⚙️ 使用流程
+运行脚本：执行上述一键命令。
+选择 IP：脚本会自动检测公网 IP，建议选择 IPv4 以获得最佳兼容性。
+选择模式：
+1 ChatGPT 专用 (仅接管 OpenAI 流量)
+2 Gemini 专用 (含 Google 基础服务，防止登录验证失败)
+3 TikTok 专用 (独立解锁国际版抖音)
+4 所有 AI (GPT + Gemini)
+5 全流媒体 (Netflix + Disney + TikTok + Spotify)
+6 超级全家桶 (上述所有功能合集，推荐)
+安全授权：输入你的 入口/中转服务器 IP（例如阿里云深圳、腾讯云广州的公网 IP）。脚本会自动配置防火墙放行规则。
+应用配置：
+脚本运行结束后，会输出一段完整的 JSON 配置代码。
+全选复制 这段黄色代码。
+登录 V2bX / NodePass 面板，找到对应节点的配置模版，清空原内容并粘贴。
+重启节点 即可生效。
+🛠️ 架构原理
+code
+Text
+[ 用户客户端 ]
+      |
+      v
+[ 需解锁的节点服务器 ]  <--- (V2bX / v2board / Xboard 等端点)
+      |
+      | (分流规则：domain_suffix)
+      |
+      +--- (普通流量) -----> [ 直连目标 ] (保持原线路速度，如 YouTube)
+      |
+      +--- (需解锁流量) ----> [ Prism-DNS 解锁机 ] -----> [ OpenAI / Netflix ]
+                             (Docker SNIProxy)         (伪装为原生 IP)
+📝 注意事项
+端口占用：本脚本需要占用解锁机的 80, 443, 53 端口。如果该机器同时运行了节点程序，请务必将节点端口改为 8443、2053 或其他非标准端口。
+系统支持：支持 Debian 10+, Ubuntu 20.04+, CentOS 7+。
+防火墙：脚本会自动配置 ufw 或 iptables。如果你使用的是 AWS、阿里云等有外部安全组的机器，请务必在云厂商控制台同步放行 53/udp, 53/tcp, 80/tcp, 443/tcp。
+🤝 贡献与反馈
+如果您发现任何问题，欢迎提交 Issue 或 Pull Request。
+Star ⭐ 这个项目以支持开发！
+code
+Code
