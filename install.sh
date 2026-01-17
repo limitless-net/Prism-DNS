@@ -1,9 +1,8 @@
-cat > install.sh << 'EOF'
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.1 镜像修复版)
-#   更新日志：修复 Docker 镜像拉取失败问题
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.2 GitHub修正版)
+#   更新日志：修复 Docker 镜像，修复语法格式，适配 GitHub Raw 调用
 # ==========================================================
 
 RED='\033[0;31m'
@@ -69,7 +68,7 @@ install_docker() {
 
 # 4. 选择解锁模式 & 部署服务
 deploy_service() {
-    # --- 定义规则变量 ---
+    # --- 定义规则变量 (使用换行符拼接) ---
     
     # 1. ChatGPT
     CONF_GPT="address=/openai.com/$FINAL_IP
@@ -81,6 +80,7 @@ address=/sentry.io/$FINAL_IP
 address=/identrust.com/$FINAL_IP
 address=/challenges.cloudflare.com/$FINAL_IP
 address=/ai.com/$FINAL_IP"
+
     JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "ai.com"'
 
     # 2. Gemini
@@ -99,9 +99,10 @@ address=/googlevideo.com/$FINAL_IP
 address=/youtube.com/$FINAL_IP
 address=/ytimg.com/$FINAL_IP
 address=/ggpht.com/$FINAL_IP"
+
     JSON_GEMINI='"bard.google.com", "gemini.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "googlevideo.com", "youtube.com", "ytimg.com", "ggpht.com"'
 
-    # 3. TikTok (独立)
+    # 3. TikTok
     CONF_TIKTOK="address=/tiktok.com/$FINAL_IP
 address=/tiktokv.com/$FINAL_IP
 address=/tiktokcdn.com/$FINAL_IP
@@ -110,9 +111,10 @@ address=/ibytedtos.com/$FINAL_IP
 address=/ipstatp.com/$FINAL_IP
 address=/muscdn.com/$FINAL_IP
 address=/musical.ly/$FINAL_IP"
+
     JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "ipstatp.com", "muscdn.com", "musical.ly"'
 
-    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO)
+    # 4. 流媒体
     CONF_STREAMING="address=/netflix.com/$FINAL_IP
 address=/netflix.net/$FINAL_IP
 address=/nflximg.net/$FINAL_IP
@@ -127,6 +129,7 @@ address=/pscdn.co/$FINAL_IP
 address=/scdn.co/$FINAL_IP
 address=/hbo.com/$FINAL_IP
 address=/hbogo.com/$FINAL_IP"
+
     JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "hbo.com", "hbogo.com"'
 
     # --- 菜单 ---
@@ -210,7 +213,7 @@ EOL
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✅ 解锁服务启动成功！${NC}"
     else
-        echo -e "${RED}❌ 启动失败，可能 Docker Hub 连接超时，请检查网络或配置镜像加速${NC}"
+        echo -e "${RED}❌ 启动失败，请检查 Docker 或端口占用${NC}"
         exit 1
     fi
 }
@@ -340,7 +343,9 @@ EOF
 }
 
 # 流程
+# 确保目录权限正确
 chmod 777 $WORK_DIR -R 2>/dev/null
+
 select_public_ip
 install_docker
 deploy_service
