@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.5 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.6 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置
-#   Prism-DNS Unlock Service Setup Script (V3.5)
+#   Prism-DNS Unlock Service Setup Script (V3.6)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config
 # ==========================================================
 
@@ -556,8 +556,13 @@ address=/auth0.com/$FINAL_IP
 address=/sentry.io/$FINAL_IP
 address=/identrust.com/$FINAL_IP
 address=/challenges.cloudflare.com/$FINAL_IP
-address=/ai.com/$FINAL_IP"
-    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "ai.com"'
+address=/ai.com/$FINAL_IP
+address=/intercom.io/$FINAL_IP
+address=/intercomcdn.com/$FINAL_IP
+address=/featuregates.org/$FINAL_IP
+address=/statsigapi.net/$FINAL_IP
+address=/stripe.com/$FINAL_IP"
+    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "identrust.com", "challenges.cloudflare.com", "ai.com", "intercom.io", "intercomcdn.com", "featuregates.org", "statsigapi.net", "stripe.com"'
 
     # 2. Gemini
     CONF_GEMINI="address=/bard.google.com/$FINAL_IP
@@ -602,8 +607,12 @@ address=/spotify.com/$FINAL_IP
 address=/pscdn.co/$FINAL_IP
 address=/scdn.co/$FINAL_IP
 address=/hbo.com/$FINAL_IP
-address=/hbogo.com/$FINAL_IP"
-    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "hbo.com", "hbogo.com"'
+address=/hbogo.com/$FINAL_IP
+address=/hbomax.com/$FINAL_IP
+address=/onetrust.com/$FINAL_IP
+address=/bamgrid.com/$FINAL_IP
+address=/go.com/$FINAL_IP"
+    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "pscdn.co", "scdn.co", "hbo.com", "hbogo.com", "hbomax.com", "onetrust.com", "bamgrid.com", "go.com"'
 
     # --- Menu / 菜单 ---
     if [ "$LANG_CHOICE" = "en" ]; then
@@ -1004,6 +1013,10 @@ generate_json() {
   ],
   "route": {
     "rules": [
+      {
+        "domain_suffix": [${FINAL_JSON_LIST}],
+        "outbound": "direct"
+      },
       {
         "ip_is_private": true,
         "outbound": "block"
