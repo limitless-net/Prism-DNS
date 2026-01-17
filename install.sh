@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.7 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.8 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V3.7)
+#   Prism-DNS Unlock Service Setup Script (V3.8)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
@@ -1096,44 +1096,47 @@ generate_json() {
     # - route.rules: Ensure traffic for these domains is routed correctly
     #   route.rules: 确保这些域名的流量被正确路由
 
+    # Generate IP CIDR format based on IP version
+    local IP_CIDR
+    if [[ "$FINAL_IP" == *":"* ]]; then
+        # IPv6 address
+        IP_CIDR="${FINAL_IP}/128"
+    else
+        # IPv4 address
+        IP_CIDR="${FINAL_IP}/32"
+    fi
+
     cat <<EOF
 {
   "dns": {
     "servers": [
       {
         "tag": "unlock_dns",
-        "address": "${FINAL_IP}"
+        "address": "${FINAL_IP}",
+        "address_resolver": "local_dns",
+        "detour": "direct"
       },
       {
-        "tag": "cf",
-        "address": "1.1.1.1"
+        "tag": "local_dns",
+        "address": "1.1.1.1",
+        "detour": "direct"
       }
     ],
     "rules": [
       {
         "domain_suffix": [${FINAL_JSON_LIST}],
-        "server": "unlock_dns"
+        "server": "unlock_dns",
+        "disable_cache": true
       }
     ],
-    "final": "cf",
-    "strategy": "prefer_ipv4"
+    "final": "local_dns",
+    "strategy": "prefer_ipv4",
+    "disable_cache": false
   },
   "outbounds": [
     {
       "tag": "direct",
-      "type": "direct",
-      "domain_resolver": {
-        "server": "cf",
-        "strategy": "prefer_ipv4"
-      }
-    },
-    {
-      "tag": "unlock",
-      "type": "direct",
-      "domain_resolver": {
-        "server": "unlock_dns",
-        "strategy": "prefer_ipv4"
-      }
+      "type": "direct"
     },
     {
       "type": "block",
@@ -1143,8 +1146,20 @@ generate_json() {
   "route": {
     "rules": [
       {
+        "protocol": "dns",
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": ["${IP_CIDR}"],
+        "outbound": "direct"
+      },
+      {
+        "protocol": "quic",
+        "outbound": "block"
+      },
+      {
         "domain_suffix": [${FINAL_JSON_LIST}],
-        "outbound": "unlock"
+        "outbound": "direct"
       },
       {
         "ip_is_private": true,
@@ -1183,7 +1198,8 @@ generate_json() {
           "udp","tcp"
         ]
       }
-    ]
+    ],
+    "auto_detect_interface": false
   },
   "experimental": {
     "cache_file": {
