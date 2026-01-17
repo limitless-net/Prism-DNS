@@ -971,9 +971,17 @@ generate_json() {
     echo -e "${YELLOW}"
 
     # Route rules description / 路由规则说明:
-    # 1. Private IP traffic blocked / 私有 IP 流量被屏蔽
-    # 2. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
-    # 3. All other traffic goes direct via UDP/TCP / 其他所有流量通过 UDP/TCP 走 direct
+    # 1. Unlock domains routed to direct (via DNS hijack to unlock server) / 解锁域名走 direct（通过 DNS 劫持到解锁机）
+    # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
+    # 3. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
+    # 4. All other traffic goes direct via UDP/TCP / 其他所有流量通过 UDP/TCP 走 direct
+    #
+    # Note: domain_suffix appears in BOTH dns.rules AND route.rules intentionally:
+    # 注意：domain_suffix 同时出现在 dns.rules 和 route.rules 中是有意为之：
+    # - dns.rules: Route DNS queries to unlock_dns (returns unlock server IP)
+    #   dns.rules: 将 DNS 查询路由到解锁机（返回解锁机 IP）
+    # - route.rules: Ensure traffic for these domains is routed correctly
+    #   route.rules: 确保这些域名的流量被正确路由
 
     cat <<EOF
 {
