@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.6 GitHub版)
-#   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置
-#   Prism-DNS Unlock Service Setup Script (V3.6)
-#   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.7 GitHub版)
+#   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
+#   Prism-DNS Unlock Service Setup Script (V3.7)
+#   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
 RED='\033[0;31m'
