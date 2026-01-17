@@ -189,11 +189,22 @@ address=/hbogo.com/$FINAL_IP"
             ;;
     esac
 
+    # 下载 Dockerfile
+    if [ ! -f "Dockerfile" ]; then
+        echo -e "${YELLOW}正在下载 Dockerfile...${NC}"
+        curl -fsSL https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/Dockerfile -o Dockerfile
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}下载 Dockerfile 失败，请检查网络连接${NC}"
+            exit 1
+        fi
+    fi
+
     # 生成 docker-compose
     cat > docker-compose.yml <<EOL
 services:
   sniproxy:
-    image: myxuchangbin/dnsmasq_sniproxy:latest
+    build: .
+    image: prism-dns:latest
     container_name: dns_unlock
     restart: always
     network_mode: host
@@ -202,8 +213,9 @@ services:
       - ./dnsmasq.conf:/etc/dnsmasq.d/custom_unlock.conf
 EOL
 
-    echo -e "${YELLOW}正在重启服务...${NC}"
+    echo -e "${YELLOW}正在构建并启动服务...${NC}"
     docker compose down 2>/dev/null
+    docker compose build
     docker compose up -d
 }
 
