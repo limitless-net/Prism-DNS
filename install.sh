@@ -285,12 +285,24 @@ verify_services() {
     # DNS 解析测试
     echo -e "\n${YELLOW}测试 DNS 解析功能：${NC}"
     
-    # 根据选择的模式确定测试域名
-    TEST_DOMAIN="openai.com"
+    # 根据选择的模式智能选择测试域名
+    TEST_DOMAIN=""
     if [ -n "$FINAL_JSON_LIST" ]; then
-        if echo "$FINAL_JSON_LIST" | grep -q "netflix.com"; then
+        if echo "$FINAL_JSON_LIST" | grep -q "openai.com"; then
+            TEST_DOMAIN="openai.com"
+        elif echo "$FINAL_JSON_LIST" | grep -q "netflix.com"; then
             TEST_DOMAIN="netflix.com"
+        elif echo "$FINAL_JSON_LIST" | grep -q "google.com"; then
+            TEST_DOMAIN="google.com"
+        elif echo "$FINAL_JSON_LIST" | grep -q "tiktok.com"; then
+            TEST_DOMAIN="tiktok.com"
         fi
+    fi
+    
+    # 如果没有找到合适的测试域名，跳过测试
+    if [ -z "$TEST_DOMAIN" ]; then
+        echo -e "${YELLOW}⚠ 无法确定测试域名，跳过 DNS 解析测试${NC}"
+        return 0
     fi
     
     # 优先使用 dig (更可靠)
@@ -305,7 +317,7 @@ verify_services() {
         fi
     # 降级使用 nslookup
     elif command -v nslookup &> /dev/null; then
-        # 使用更可靠的解析方法：过滤掉服务器信息行，提取域名解析结果
+        # 使用更可靠的解析方法: 过滤掉服务器信息行，提取域名解析结果
         DNS_OUTPUT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null)
         DNS_RESULT=$(echo "$DNS_OUTPUT" | grep -v "^Server:" | grep "Address:" | tail -1 | awk '{print $2}' | tr -d '#')
         
