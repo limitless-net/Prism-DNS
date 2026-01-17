@@ -109,6 +109,38 @@ select_language() {
     esac
 }
 
+# Select action: install or uninstall / 选择操作：安装或卸载
+select_action() {
+    clear
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Select Action${NC}" || echo -e "${SKY}  选择操作${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    if [ "$LANG_CHOICE" = "en" ]; then
+        echo "Please select an action:"
+        echo "1. Install / Reinstall Unlock Service"
+        echo "2. Uninstall Unlock Service"
+        echo ""
+    else
+        echo "请选择操作："
+        echo "1. 安装 / 重新安装解锁服务"
+        echo "2. 卸载解锁服务"
+        echo ""
+    fi
+    
+    read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter option [1-2] (default: 1): " || echo "请输入选项 [1-2] (默认: 1): ")" action_input
+    
+    case $action_input in
+        2)
+            uninstall_service
+            exit 0
+            ;;
+        *)
+            # Continue with installation
+            ;;
+    esac
+}
+
 # Multilingual text function
 txt() {
     local key="$1"
@@ -1220,13 +1252,152 @@ EOF
     echo -e "${GREEN}═══════════════════════════════════════════════${NC}\n"
 }
 
+# Uninstall service / 卸载服务
+uninstall_service() {
+    echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Uninstalling Prism-DNS Unlock Service${NC}" || echo -e "${SKY}  卸载 Prism-DNS 解锁服务${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    # Confirm uninstallation
+    if [ "$LANG_CHOICE" = "en" ]; then
+        echo -e "${YELLOW}Warning: This will remove all Prism-DNS components and configurations.${NC}"
+        read -p "Are you sure you want to continue? [y/N]: " confirm
+    else
+        echo -e "${YELLOW}警告: 这将删除所有 Prism-DNS 组件和配置。${NC}"
+        read -p "确定要继续吗? [y/N]: " confirm
+    fi
+    
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Uninstallation cancelled" || echo "卸载已取消")${NC}"
+        return 0
+    fi
+    
+    # Detect deployment mode by checking what's installed
+    local has_docker=false
+    local has_native=false
+    
+    if [ -d "$WORK_DIR" ] && docker ps -a 2>/dev/null | grep -q "dns_unlock"; then
+        has_docker=true
+    fi
+    
+    if systemctl list-units --all 2>/dev/null | grep -q "dnsmasq" && [ -f /etc/dnsmasq.d/unlock.conf ]; then
+        has_native=true
+    fi
+    
+    # Uninstall Docker mode
+    if [ "$has_docker" = true ]; then
+        echo -e "\n${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing Docker deployment..." || echo "卸载 Docker 部署...")${NC}"
+        
+        # Stop and remove container
+        if docker ps -a | grep -q "dns_unlock"; then
+            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Stopping container..." || echo "停止容器...")${NC}"
+            docker stop dns_unlock 2>/dev/null || true
+            docker rm dns_unlock 2>/dev/null || true
+            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Container removed" || echo "容器已删除")${NC}"
+        fi
+        
+        # Remove Docker image
+        if docker images | grep -q "prism-dns"; then
+            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing Docker image..." || echo "删除 Docker 镜像...")${NC}"
+            docker rmi prism-dns:latest 2>/dev/null || true
+            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Docker image removed" || echo "Docker 镜像已删除")${NC}"
+        fi
+        
+        # Remove working directory
+        if [ -d "$WORK_DIR" ]; then
+            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing configuration files..." || echo "删除配置文件...")${NC}"
+            rm -rf "$WORK_DIR"
+            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Configuration files removed" || echo "配置文件已删除")${NC}"
+        fi
+    fi
+    
+    # Uninstall Native mode
+    if [ "$has_native" = true ]; then
+        echo -e "\n${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing native deployment..." || echo "卸载原生部署...")${NC}"
+        
+        # Stop services
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Stopping services..." || echo "停止服务...")${NC}"
+        systemctl stop dnsmasq 2>/dev/null || true
+        systemctl stop sniproxy 2>/dev/null || true
+        systemctl disable dnsmasq 2>/dev/null || true
+        systemctl disable sniproxy 2>/dev/null || true
+        echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Services stopped" || echo "服务已停止")${NC}"
+        
+        # Remove unlock configuration
+        if [ -f /etc/dnsmasq.d/unlock.conf ]; then
+            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing DNS unlock rules..." || echo "删除 DNS 解锁规则...")${NC}"
+            rm -f /etc/dnsmasq.d/unlock.conf
+            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "DNS unlock rules removed" || echo "DNS 解锁规则已删除")${NC}"
+        fi
+        
+        # Restore original dnsmasq config if backup exists
+        if [ -f /etc/dnsmasq.conf.bak ]; then
+            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Restoring original dnsmasq config..." || echo "恢复原始 dnsmasq 配置...")${NC}"
+            mv /etc/dnsmasq.conf.bak /etc/dnsmasq.conf
+            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Original config restored" || echo "原始配置已恢复")${NC}"
+        fi
+        
+        # Restart dnsmasq if it was running before
+        if systemctl is-enabled dnsmasq 2>/dev/null | grep -q "enabled"; then
+            systemctl start dnsmasq 2>/dev/null || true
+        fi
+        
+        # Remove working directory
+        if [ -d "$WORK_DIR" ]; then
+            rm -rf "$WORK_DIR"
+        fi
+        
+        # Note about packages
+        if [ "$LANG_CHOICE" = "en" ]; then
+            echo -e "\n${YELLOW}Note: dnsmasq and sniproxy packages were not removed.${NC}"
+            echo -e "${YELLOW}If you want to remove them, run:${NC}"
+            echo -e "${SKY}  apt-get remove --purge dnsmasq sniproxy${NC}"
+        else
+            echo -e "\n${YELLOW}注意: dnsmasq 和 sniproxy 软件包未被删除。${NC}"
+            echo -e "${YELLOW}如需删除，请运行:${NC}"
+            echo -e "${SKY}  apt-get remove --purge dnsmasq sniproxy${NC}"
+        fi
+    fi
+    
+    # Clean up firewall rules (optional, commented out to avoid disrupting other services)
+    # Users can manually clean up firewall rules if needed
+    
+    if [ "$has_docker" = false ] && [ "$has_native" = false ]; then
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "No Prism-DNS installation found" || echo "未找到 Prism-DNS 安装")${NC}"
+    else
+        echo -e "\n${GREEN}═══════════════════════════════════════════════${NC}"
+        echo -e "${GREEN}$([ "$LANG_CHOICE" = "en" ] && echo "✓ Uninstallation completed successfully" || echo "✓ 卸载成功完成")${NC}"
+        echo -e "${GREEN}═══════════════════════════════════════════════${NC}\n"
+        
+        if [ "$LANG_CHOICE" = "en" ]; then
+            echo "Removed components:"
+            [ "$has_docker" = true ] && echo "  - Docker container and image"
+            [ "$has_native" = true ] && echo "  - Native service configuration"
+            echo "  - Configuration files in $WORK_DIR"
+            echo ""
+            echo "Note: Firewall rules were not modified."
+            echo "If you configured firewall rules, you may want to review and clean them up manually."
+        else
+            echo "已删除的组件："
+            [ "$has_docker" = true ] && echo "  - Docker 容器和镜像"
+            [ "$has_native" = true ] && echo "  - 原生服务配置"
+            echo "  - $WORK_DIR 中的配置文件"
+            echo ""
+            echo "注意：防火墙规则未被修改。"
+            echo "如果您配置了防火墙规则，可能需要手动检查并清理它们。"
+        fi
+    fi
+}
+
 # Main execution flow / 主流程
 main() {
+    select_language
+    select_action
+    
     # Create working directory with secure permissions
     mkdir -p "$WORK_DIR"
     chmod 755 "$WORK_DIR" 2>/dev/null
     
-    select_language
     check_port_availability
     select_public_ip
     select_deploy_mode
