@@ -382,11 +382,15 @@ generate_json() {
         "server": "my_private_unlock"
       }
     ],
-    "strategy": "ipv4_only"
+    "strategy": "prefer_ipv4"
   },
   "inbounds": [],
   "outbounds": [
-    { "tag": "direct", "type": "direct" },
+    {
+      "tag": "direct",
+      "type": "direct",
+      "domain_strategy": "prefer_ipv4"
+    },
     { "tag": "block", "type": "block" },
     { "tag": "dns-out", "type": "dns" }
   ],
@@ -425,6 +429,9 @@ generate_json() {
         "domain_suffix": [
           ${FINAL_JSON_LIST}
         ],
+        "outbound": "direct"
+      },
+      {
         "outbound": "direct"
       }
     ],
