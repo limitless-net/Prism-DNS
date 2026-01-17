@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.3 格式修正版)
-#   更新日志：修复 EOF 缩进导致的语法错误
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.0 GitHub版)
+#   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置
 # ==========================================================
 
 RED='\033[0;31m'
@@ -80,7 +80,6 @@ address=/sentry.io/$FINAL_IP
 address=/identrust.com/$FINAL_IP
 address=/challenges.cloudflare.com/$FINAL_IP
 address=/ai.com/$FINAL_IP"
-
     JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "ai.com"'
 
     # 2. Gemini
@@ -99,10 +98,9 @@ address=/googlevideo.com/$FINAL_IP
 address=/youtube.com/$FINAL_IP
 address=/ytimg.com/$FINAL_IP
 address=/ggpht.com/$FINAL_IP"
-
     JSON_GEMINI='"bard.google.com", "gemini.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "googlevideo.com", "youtube.com", "ytimg.com", "ggpht.com"'
 
-    # 3. TikTok
+    # 3. TikTok (独立)
     CONF_TIKTOK="address=/tiktok.com/$FINAL_IP
 address=/tiktokv.com/$FINAL_IP
 address=/tiktokcdn.com/$FINAL_IP
@@ -111,10 +109,9 @@ address=/ibytedtos.com/$FINAL_IP
 address=/ipstatp.com/$FINAL_IP
 address=/muscdn.com/$FINAL_IP
 address=/musical.ly/$FINAL_IP"
-
     JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "ipstatp.com", "muscdn.com", "musical.ly"'
 
-    # 4. 流媒体
+    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO)
     CONF_STREAMING="address=/netflix.com/$FINAL_IP
 address=/netflix.net/$FINAL_IP
 address=/nflximg.net/$FINAL_IP
@@ -129,7 +126,6 @@ address=/pscdn.co/$FINAL_IP
 address=/scdn.co/$FINAL_IP
 address=/hbo.com/$FINAL_IP
 address=/hbogo.com/$FINAL_IP"
-
     JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "hbo.com", "hbogo.com"'
 
     # --- 菜单 ---
@@ -193,11 +189,11 @@ address=/hbogo.com/$FINAL_IP"
             ;;
     esac
 
-    # 生成 docker-compose (使用 suikaca 镜像)
+    # 生成 docker-compose
     cat > docker-compose.yml <<EOL
 services:
   sniproxy:
-    image: suikaca/dnsmasq_sniproxy:latest
+    image: myxuchangbin/dnsmasq_sniproxy:latest
     container_name: dns_unlock
     restart: always
     network_mode: host
@@ -209,13 +205,6 @@ EOL
     echo -e "${YELLOW}正在重启服务...${NC}"
     docker compose down 2>/dev/null
     docker compose up -d
-    
-    if [ $? -eq 0 ]; then
-        echo -e "${GREEN}✅ 解锁服务启动成功！${NC}"
-    else
-        echo -e "${RED}❌ 启动失败，请检查 Docker 或端口占用${NC}"
-        exit 1
-    fi
 }
 
 # 5. 配置白名单防火墙
@@ -255,6 +244,7 @@ generate_json() {
     echo -e "${GREEN}======================================================${NC}"
     echo -e "解锁 IP : ${YELLOW}$FINAL_IP${NC}"
     echo -e "当前模式: ${SKY}$TYPE_NAME${NC}"
+    echo -e "功能: 审计屏蔽 + 选定解锁规则 + 兼容新版核心"
     echo -e "${YELLOW}"
 
     cat <<EOF
