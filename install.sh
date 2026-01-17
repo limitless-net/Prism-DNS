@@ -1291,8 +1291,8 @@ uninstall_service() {
         fi
     fi
     
-    # Check for Native installation
-    if systemctl list-units --all 2>/dev/null | grep -q "dnsmasq" && [ -f /etc/dnsmasq.d/unlock.conf ]; then
+    # Check for Native installation - the presence of unlock.conf is the key indicator
+    if [ -f /etc/dnsmasq.d/unlock.conf ]; then
         has_native=true
     fi
     
@@ -1314,14 +1314,6 @@ uninstall_service() {
             docker rmi prism-dns:latest 2>/dev/null || true
             echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Docker image removed" || echo "Docker 镜像已删除")${NC}"
         fi
-        
-        # Remove working directory
-        if [ -d "$WORK_DIR" ]; then
-            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing configuration files..." || echo "删除配置文件...")${NC}"
-            rm -rf "$WORK_DIR"
-            workdir_removed=true
-            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Configuration files removed" || echo "配置文件已删除")${NC}"
-        fi
     fi
     
     # Uninstall Native mode
@@ -1330,7 +1322,7 @@ uninstall_service() {
         
         # Check if dnsmasq was enabled before stopping (for later restoration)
         local dnsmasq_was_enabled=false
-        if systemctl is-enabled dnsmasq 2>/dev/null | grep -q "enabled"; then
+        if systemctl is-enabled dnsmasq >/dev/null 2>&1; then
             dnsmasq_was_enabled=true
         fi
         
@@ -1362,12 +1354,6 @@ uninstall_service() {
             systemctl start dnsmasq 2>/dev/null || true
         fi
         
-        # Remove working directory
-        if [ -d "$WORK_DIR" ]; then
-            rm -rf "$WORK_DIR"
-            workdir_removed=true
-        fi
-        
         # Note about packages
         if [ "$LANG_CHOICE" = "en" ]; then
             echo -e "\n${YELLOW}Note: dnsmasq and sniproxy packages were not removed.${NC}"
@@ -1377,6 +1363,20 @@ uninstall_service() {
             echo -e "\n${YELLOW}注意: dnsmasq 和 sniproxy 软件包未被删除。${NC}"
             echo -e "${YELLOW}如需删除，请运行:${NC}"
             echo -e "${SKY}  apt-get remove --purge dnsmasq sniproxy${NC}"
+        fi
+    fi
+    
+    # Remove working directory (common for both modes)
+    if [ -d "$WORK_DIR" ]; then
+        if [ "$has_docker" = true ]; then
+            echo -e "\n${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing configuration files..." || echo "删除配置文件...")${NC}"
+            rm -rf "$WORK_DIR"
+            workdir_removed=true
+            echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Configuration files removed" || echo "配置文件已删除")${NC}"
+        else
+            # For native mode, remove silently
+            rm -rf "$WORK_DIR"
+            workdir_removed=true
         fi
     fi
     
