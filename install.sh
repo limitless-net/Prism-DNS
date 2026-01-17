@@ -77,7 +77,7 @@ spinner() {
     
     while kill -0 $pid 2>/dev/null; do
         i=$(( (i+1) %10 ))
-        printf "\r${YELLOW}${spin:$i:1} ${msg}${NC}"
+        printf "\r%s%s %s%s" "${YELLOW}" "${spin:$i:1}" "${msg}" "${NC}"
         sleep 0.1
     done
     printf "\r"
@@ -332,7 +332,7 @@ address=/hbogo.com/$FINAL_IP"
     read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter option [1-6]: " || echo "请输入选项 [1-6]: ")" MODE_CHOICE
 
     mkdir -p $WORK_DIR
-    cd $WORK_DIR
+    cd $WORK_DIR || exit 1
     echo "" > dnsmasq.conf
 
     case $MODE_CHOICE in
