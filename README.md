@@ -12,6 +12,7 @@
 
 ## ✨ 核心特性
 
+- **双部署模式**：支持 Docker 模式（推荐）和原生模式（适合低配 VPS），灵活应对不同硬件环境。
 - **多语言界面**：支持中文和英文，方便国际用户使用。
 - **智能端口检测**：安装前自动检测端口冲突，提供清晰的错误提示和解决建议。
 - **多模式选择**：支持仅解锁 AI、仅解锁流媒体、仅解锁 TikTok 或 **超级全家桶**模式。
@@ -23,6 +24,17 @@
 - **一键生成配置**：脚本运行结束直接输出 V2bX/NodePass 可用的 JSON 代码，复制粘贴即用。
 
 ## 🆕 最近更新
+
+### v3.4 - 2026年1月 原生模式 & Docker 安装优化
+
+针对低配 VPS 用户的重大改进，解决 Docker 安装失败问题：
+
+- **新增原生模式**：直接在系统上安装 dnsmasq 和 sniproxy，无需 Docker，内存占用降低约 60%（~50MB vs ~150MB）
+- **部署模式选择**：安装时可选择 Docker 模式（推荐）或原生模式（低资源）
+- **Docker 安装验证**：安装 Docker 后会验证是否成功，失败时提供清晰的错误信息和解决建议
+- **Docker Compose 兼容性**：同时支持 docker compose（v2）和 docker-compose（v1）
+
+> **适用场景**：如果你的 VPS 内存较小（< 512MB）或 Docker 安装失败，建议选择原生模式。
 
 ### v3.3 - 2026年1月 Sing-box 1.12+ 兼容性修复
 
@@ -75,7 +87,11 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 
 4. **选择 IP**：脚本会自动检测公网 IP，建议选择 IPv4 以获得最佳兼容性。
 
-5. **选择模式**：
+5. **选择部署模式**：
+   - `1` Docker 模式 (推荐) - 容器隔离，便于管理
+   - `2` 原生模式 (低资源) - 直接安装 dnsmasq + sniproxy，内存占用更低（~50MB）
+
+6. **选择解锁模式**：
    - `1` ChatGPT 专用 (仅接管 OpenAI 流量)
    - `2` Gemini 专用 (含 Google 基础服务，防止登录验证失败)
    - `3` TikTok 专用 (独立解锁国际版抖音)
@@ -83,17 +99,17 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
    - `5` 全流媒体 (Netflix + Disney + TikTok + Spotify)
    - `6` 超级全家桶 (上述所有功能合集，**推荐**)
 
-6. **Docker 安装**：如果未安装 Docker，脚本会自动安装并配置。
+7. **依赖安装**：根据选择的部署模式，脚本会自动安装 Docker 或原生依赖（dnsmasq + sniproxy）。
 
-7. **安全授权**：输入你的 **入口/中转服务器 IP**（例如阿里云深圳、腾讯云广州的公网 IP）。脚本会自动配置防火墙放行规则。
+8. **安全授权**：输入你的 **入口/中转服务器 IP**（例如阿里云深圳、腾讯云广州的公网 IP）。脚本会自动配置防火墙放行规则。
 
-8. **服务验证**：脚本会逐步验证 Docker 容器状态、端口监听情况和 DNS 解析功能。
+9. **服务验证**：脚本会逐步验证服务状态、端口监听情况和 DNS 解析功能。
 
-9. **应用配置**：
-   - 脚本运行结束后，会输出一段完整的 JSON 配置代码。
-   - **全选复制** 这段黄色代码。
-   - 登录 V2bX / NodePass 面板，找到对应节点的配置模版，清空原内容并粘贴。
-   - **重启节点** 即可生效。
+10. **应用配置**：
+    - 脚本运行结束后，会输出一段完整的 JSON 配置代码。
+    - **全选复制** 这段黄色代码。
+    - 登录 V2bX / NodePass 面板，找到对应节点的配置模版，清空原内容并粘贴。
+    - **重启节点** 即可生效。
 
 ## 🛠️ 架构原理
 
@@ -117,8 +133,43 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 - **系统支持**：支持 Debian 10+, Ubuntu 20.04+, CentOS 7+。
 - **防火墙**：脚本会自动配置 `ufw` 或 `iptables`。如果你使用的是 AWS、阿里云等有外部安全组的机器，请务必在云厂商控制台同步放行 `53/udp`, `53/tcp`, `80/tcp`, `443/tcp`。
 - **地理位置**：解锁机和落地机【不需要】在同一地区。例如：解锁机在香港，落地机可以在日本、美国或任何其他地区。
+- **低配 VPS**：如果 VPS 内存小于 512MB，建议选择**原生模式**，内存占用仅约 50MB。
 
 ## 🔍 故障排查
+
+### Docker 安装失败
+
+> **✨ v3.4 新增功能**：脚本现在会在 Docker 安装后进行验证，失败时会给出明确提示。
+
+如果看到 `docker: command not found` 错误：
+
+1. **选择原生模式**：重新运行脚本，选择"原生模式（低资源）"，无需 Docker
+   ```bash
+   bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)
+   # 在部署模式选择时输入 2
+   ```
+
+2. **手动安装 Docker**（可选）：
+   ```bash
+   # 查看安装日志
+   cat /tmp/docker_install.log
+   
+   # 手动安装 Docker
+   curl -fsSL https://get.docker.com | bash
+   
+   # 启动 Docker 服务
+   systemctl enable docker
+   systemctl start docker
+   ```
+
+3. **检查系统资源**：
+   ```bash
+   # 检查可用内存
+   free -m
+   
+   # 检查磁盘空间
+   df -h
+   ```
 
 ### 端口冲突问题
 
@@ -237,7 +288,14 @@ A: 重新运行安装脚本，选择新的模式，然后更新落地机的配�
 **Q: 可以在已有节点的机器上部署解锁服务吗？**
 A: 可以，但需要将节点端口改为非标准端口（如 8443），因为解锁服务需要占用 80 和 443 端口。
 
+**Q: Docker 模式和原生模式有什么区别？**
+A: 
+- Docker 模式：服务运行在容器中，隔离性好，便于管理，但内存占用稍高（约 150MB）
+- 原生模式：服务直接运行在系统上，内存占用低（约 50MB），适合低配 VPS
+
 ## 🔧 管理命令
+
+### Docker 模式
 
 ```bash
 # 查看服务状态
@@ -254,6 +312,25 @@ cd /root/dns_unlock && docker compose down
 
 # 重新部署（会保留现有配置）
 cd /root/dns_unlock && docker compose up -d --build
+
+# 完全重新安装
+bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)
+```
+
+### 原生模式
+
+```bash
+# 查看服务状态
+systemctl status dnsmasq sniproxy
+
+# 查看实时日志
+journalctl -u dnsmasq -u sniproxy -f
+
+# 重启服务
+systemctl restart dnsmasq sniproxy
+
+# 停止服务
+systemctl stop dnsmasq sniproxy
 
 # 完全重新安装
 bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)
