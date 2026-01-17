@@ -813,7 +813,7 @@ EOL
     (
         tail -f "$build_log" 2>/dev/null | while IFS= read -r line; do
             # Show step progress and important messages
-            if echo "$line" | grep -qE "(Step|#[0-9]|Successfully|ERROR|DONE|downloading|extracting)"; then
+            if [[ "$line" =~ (Step|#[0-9]|Successfully|ERROR|DONE|downloading|extracting) ]]; then
                 echo "$line"
             fi
         done
@@ -824,8 +824,10 @@ EOL
     wait $build_pid
     local build_status=$?
     
-    # Stop the tail process
-    kill $tail_pid 2>/dev/null || true
+    # Stop the tail process gracefully
+    kill -TERM $tail_pid 2>/dev/null || true
+    sleep 0.5
+    kill -KILL $tail_pid 2>/dev/null || true
     wait $tail_pid 2>/dev/null || true
     
     # Show any remaining important messages
