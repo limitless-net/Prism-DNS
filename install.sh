@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.2 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.3 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V4.2)
+#   Prism-DNS Unlock Service Setup Script (V4.3)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
@@ -615,7 +615,7 @@ deploy_service() {
     
     # --- Define rules / 定义规则变量 ---
     
-    # 1. ChatGPT
+    # 1. ChatGPT (expanded domain list to prevent intermittent failures)
     CONF_GPT="address=/openai.com/$FINAL_IP
 address=/chatgpt.com/$FINAL_IP
 address=/oaistatic.com/$FINAL_IP
@@ -629,8 +629,16 @@ address=/intercom.io/$FINAL_IP
 address=/intercomcdn.com/$FINAL_IP
 address=/featuregates.org/$FINAL_IP
 address=/statsigapi.net/$FINAL_IP
-address=/stripe.com/$FINAL_IP"
-    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "identrust.com", "challenges.cloudflare.com", "ai.com", "intercom.io", "intercomcdn.com", "featuregates.org", "statsigapi.net", "stripe.com"'
+address=/stripe.com/$FINAL_IP
+address=/openaiapi-site.azureedge.net/$FINAL_IP
+address=/client.crisp.chat/$FINAL_IP
+address=/livekit.cloud/$FINAL_IP
+address=/launchdarkly.com/$FINAL_IP
+address=/cloudflareinsights.com/$FINAL_IP
+address=/clarity.ms/$FINAL_IP
+address=/hcaptcha.com/$FINAL_IP
+address=/turnstile.com/$FINAL_IP"
+    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "identrust.com", "challenges.cloudflare.com", "ai.com", "intercom.io", "intercomcdn.com", "featuregates.org", "statsigapi.net", "stripe.com", "openaiapi-site.azureedge.net", "client.crisp.chat", "livekit.cloud", "launchdarkly.com", "cloudflareinsights.com", "clarity.ms", "hcaptcha.com", "turnstile.com"'
 
     # 2. Gemini
     CONF_GEMINI="address=/bard.google.com/$FINAL_IP
@@ -661,13 +669,14 @@ address=/muscdn.com/$FINAL_IP
 address=/musical.ly/$FINAL_IP"
     JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "ipstatp.com", "muscdn.com", "musical.ly"'
 
-    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO)
+    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO) - expanded domain list
     CONF_STREAMING="address=/netflix.com/$FINAL_IP
 address=/netflix.net/$FINAL_IP
 address=/nflximg.net/$FINAL_IP
 address=/nflxvideo.net/$FINAL_IP
 address=/nflxso.net/$FINAL_IP
 address=/nflxext.com/$FINAL_IP
+address=/nflxext.net/$FINAL_IP
 address=/disney.com/$FINAL_IP
 address=/disneyplus.com/$FINAL_IP
 address=/dssott.com/$FINAL_IP
@@ -679,8 +688,13 @@ address=/hbogo.com/$FINAL_IP
 address=/hbomax.com/$FINAL_IP
 address=/onetrust.com/$FINAL_IP
 address=/bamgrid.com/$FINAL_IP
-address=/go.com/$FINAL_IP"
-    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "pscdn.co", "scdn.co", "hbo.com", "hbogo.com", "hbomax.com", "onetrust.com", "bamgrid.com", "go.com"'
+address=/go.com/$FINAL_IP
+address=/max.com/$FINAL_IP
+address=/disneynow.com/$FINAL_IP
+address=/disneystreaming.com/$FINAL_IP
+address=/starplus.com/$FINAL_IP
+address=/d23.com/$FINAL_IP"
+    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "nflxext.net", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "pscdn.co", "scdn.co", "hbo.com", "hbogo.com", "hbomax.com", "onetrust.com", "bamgrid.com", "go.com", "max.com", "disneynow.com", "disneystreaming.com", "starplus.com", "d23.com"'
 
     # --- Menu / 菜单 ---
     if [ "$LANG_CHOICE" = "en" ]; then
@@ -1096,6 +1110,8 @@ generate_json() {
     #   全局 disable_cache: false（普通域名使用缓存以提高速度）
     # - Unlock rule disable_cache: true (unlock domains always query fresh IP)
     #   解锁规则 disable_cache: true（解锁域名始终查询最新 IP）
+    # - independent_cache: true (prevents DNS response pollution between servers)
+    #   independent_cache: true（防止不同 DNS 服务器之间的响应污染，减少断流）
     #
     # 1. Unlock domains routed to direct outbound (DNS hijacked to unlock server IP) / 解锁域名走 direct 出站（DNS 劫持到解锁机 IP）
     # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
@@ -1155,7 +1171,8 @@ generate_json() {
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4",
-    "disable_cache": false
+    "disable_cache": false,
+    "independent_cache": true
   },
   "inbounds": [
     {
