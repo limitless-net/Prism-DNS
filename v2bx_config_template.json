@@ -1,6 +1,6 @@
 {
   "log": {
-    "level": "warning",
+    "level": "info",
     "timestamp": true
   },
   "dns": {
@@ -28,12 +28,14 @@
           "openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", 
           "auth0.com", "sentry.io", "identrust.com", "stripe.com"
         ],
-        "server": "unlock_dns"
+        "server": "unlock_dns",
+        "disable_cache": true
       }
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4",
-    "disable_cache": false
+    "disable_cache": false,
+    "independent_cache": true
   },
   "inbounds": [
     {
@@ -49,14 +51,6 @@
     {
       "tag": "block",
       "type": "block"
-    },
-    {
-      "tag": "unlock",
-      "type": "direct",
-      "domain_resolver": {
-        "server": "unlock_dns",
-        "strategy": "prefer_ipv4"
-      }
     }
   ],
   "route": {
