@@ -802,15 +802,19 @@ EOL
     fi
     
     # Show real-time progress during Docker build to avoid appearing frozen
+    # Use a temporary variable to capture build status
+    set -o pipefail
     docker compose build 2>&1 | while IFS= read -r line; do
         # Show step progress and important messages
         if echo "$line" | grep -qE "(Step|#[0-9]|Successfully|ERROR|DONE|downloading|extracting)"; then
             echo "$line"
         fi
     done
+    local build_status=$?
+    set +o pipefail
     
     # Check if build succeeded
-    if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    if [ $build_status -ne 0 ]; then
         echo -e "${RED}✗ $([ "$LANG_CHOICE" = "en" ] && echo "Docker build failed" || echo "Docker 构建失败")${NC}"
         echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Try native mode: re-run script and select option 2" || echo "尝试原生模式：重新运行脚本并选择选项 2")${NC}"
         exit 1
