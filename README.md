@@ -28,6 +28,7 @@
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/[YOUR_GITHUB_USERNAME]/[YOUR_REPO_NAME]/main/install.sh)
+
 (请确保机器已安装 curl，若未安装可先执行 apt update && apt install -y curl)
 ⚙️ 使用流程
 运行脚本：执行上述一键命令。
