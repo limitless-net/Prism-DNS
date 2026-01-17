@@ -56,8 +56,8 @@ validate_ip() {
     if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then
         # Must contain at least one colon
         if [[ "$ip" == *:* ]]; then
-            # Reject if only colons (like ":::" or "::::")
-            if [[ "$ip" =~ ^:+$ ]]; then
+            # Reject if three or more consecutive colons (like ":::" or "::::")
+            if [[ "$ip" =~ :::+ ]]; then
                 return 1
             fi
             case "$ip" in
@@ -66,7 +66,11 @@ validate_ip() {
                     return 1
                     ;;
                 *::*)
-                    # Single double colon - valid (compressed notation)
+                    # Single double colon - valid (compressed notation, includes "::")
+                    return 0
+                    ;;
+                ::)
+                    # Special case: "::" is valid (represents all zeros)
                     return 0
                     ;;
                 *)
