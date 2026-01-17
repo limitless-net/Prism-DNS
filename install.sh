@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.0 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.1 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V4.0)
+#   Prism-DNS Unlock Service Setup Script (V4.1)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
@@ -1084,7 +1084,14 @@ generate_json() {
     echo -e "${YELLOW}"
 
     # Route rules description / 路由规则说明:
-    # 1. Unlock domains routed to unlock outbound (via DNS hijack to unlock server) / 解锁域名走 unlock 出站（通过 DNS 劫持到解锁机）
+    # The unlock works by DNS hijacking: DNS queries for unlock domains are sent to unlock_dns server,
+    # which returns the unlock server's IP. The traffic then goes through direct outbound to that IP,
+    # where SNI proxy on the unlock server forwards it to the actual destination.
+    # 解锁工作原理是 DNS 劫持：解锁域名的 DNS 查询发送到 unlock_dns 服务器，
+    # 该服务器返回解锁服务器的 IP。流量然后通过 direct 出站到达该 IP，
+    # 解锁服务器上的 SNI 代理将其转发到实际目的地。
+    #
+    # 1. Unlock domains routed to direct outbound (DNS hijacked to unlock server IP) / 解锁域名走 direct 出站（DNS 劫持到解锁机 IP）
     # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
     # 3. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
     # 4. All other traffic goes direct via UDP/TCP / 其他所有流量通过 UDP/TCP 走 direct
@@ -1093,8 +1100,8 @@ generate_json() {
     # 注意：domain_suffix 同时出现在 dns.rules 和 route.rules 中是有意为之：
     # - dns.rules: Route DNS queries to unlock_dns (returns unlock server IP)
     #   dns.rules: 将 DNS 查询路由到解锁机（返回解锁机 IP）
-    # - route.rules: Ensure traffic for these domains is routed correctly
-    #   route.rules: 确保这些域名的流量被正确路由
+    # - route.rules: Ensure traffic for these domains is routed to direct outbound
+    #   route.rules: 确保这些域名的流量被路由到 direct 出站
 
     # Validate FINAL_IP is set before generating config
     if [ -z "$FINAL_IP" ]; then
@@ -1116,7 +1123,7 @@ generate_json() {
     cat <<EOF
 {
   "log": {
-    "level": "warning",
+    "level": "info",
     "timestamp": true
   },
   "dns": {
@@ -1142,7 +1149,7 @@ generate_json() {
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4",
-    "disable_cache": false
+    "disable_cache": true
   },
   "inbounds": [
     {
@@ -1154,14 +1161,6 @@ generate_json() {
     {
       "tag": "direct",
       "type": "direct"
-    },
-    {
-      "tag": "unlock",
-      "type": "direct",
-      "domain_resolver": {
-        "server": "unlock_dns",
-        "strategy": "prefer_ipv4"
-      }
     },
     {
       "tag": "block",
@@ -1207,7 +1206,7 @@ generate_json() {
       },
       {
         "domain_suffix": [${FINAL_JSON_LIST}],
-        "outbound": "unlock"
+        "outbound": "direct"
       },
       {
         "ip_is_private": true,
