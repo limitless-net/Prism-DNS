@@ -123,7 +123,7 @@ check_port_availability() {
             
             # Try to identify the process using the port
             if command -v lsof &> /dev/null; then
-                lsof -i :$port 2>/dev/null | grep LISTEN | awk '{print "  "$1" (PID: "$2")"}'
+                lsof -i :"$port" 2>/dev/null | grep LISTEN | awk '{print "  "$1" (PID: "$2")"}'
             elif command -v ss &> /dev/null; then
                 # Extract process info from ss output, handling different formats
                 ss -tlnp 2>/dev/null | grep ":$port" | sed 's/.*users:((\([^)]*\)).*/  \1/' | head -1
