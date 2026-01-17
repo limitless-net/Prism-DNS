@@ -31,11 +31,10 @@
 
 - **新增日志配置**：添加 `log` 部分，使用 warning 级别和时间戳，方便调试
 - **新增 inbounds 配置**：添加 `type: direct` 入站，确保流量正确进入
-- **新增 unlock 出站**：专用解锁出站配置，带有 `domain_resolver` 使用解锁 DNS 服务器
 - **替换 domain_regex 为 domain_suffix**：复杂的正则表达式匹配会导致连接不稳定和性能问题，现在使用更高效的 `domain_suffix` 规则
 - **增强审计规则**：添加中国大陆域名屏蔽列表，阻止回国流量
 - **协议屏蔽增强**：新增 `protocol: bittorrent` 屏蔽规则，更精确地阻止 BT 流量
-- **移除 experimental 部分**：简化配置结构，减少潜在的兼容性问题
+- **简化配置结构**：移除 `experimental` 部分和未使用的 outbound，减少潜在的兼容性问题
 - **性能提升**：`domain_suffix` 匹配速度比正则表达式快 10-100 倍
 
 > **对机场用户的影响**：此更新**不会影响**用户流量限制、设备数量限制和到期时间。这些限制由 V2bX/NodePass 面板数据库控制，不受节点配置文件影响。
@@ -155,7 +154,7 @@ curl -O https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/v2bx_conf
 cat v2bx_config_template.json
 ```
 
-此模板已将所有 `domain_regex` 规则替换为更高效的 `domain_suffix` 和 `domain_keyword` 规则，可直接复制到 V2bX 节点配置中使用。
+此模板仅包含审计规则（屏蔽 BT、回国流量等），**不包含解锁功能**。如需解锁 Netflix/ChatGPT 等服务，请运行安装脚本生成完整配置。
 
 ## ⚙️ 使用流程
 

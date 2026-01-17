@@ -1158,14 +1158,6 @@ generate_json() {
     {
       "tag": "block",
       "type": "block"
-    },
-    {
-      "tag": "unlock",
-      "type": "direct",
-      "domain_resolver": {
-        "server": "unlock_dns",
-        "strategy": "prefer_ipv4"
-      }
     }
   ],
   "route": {
