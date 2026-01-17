@@ -1275,11 +1275,22 @@ uninstall_service() {
     # Detect deployment mode by checking what's installed
     local has_docker=false
     local has_native=false
+    local docker_container_exists=false
+    local docker_image_exists=false
     
-    if [ -d "$WORK_DIR" ] && docker ps -a 2>/dev/null | grep -q "dns_unlock"; then
-        has_docker=true
+    # Check for Docker installation
+    if command -v docker &> /dev/null; then
+        if docker ps -a 2>/dev/null | grep -q "dns_unlock"; then
+            docker_container_exists=true
+            has_docker=true
+        fi
+        if docker images 2>/dev/null | grep -q "prism-dns"; then
+            docker_image_exists=true
+            has_docker=true
+        fi
     fi
     
+    # Check for Native installation
     if systemctl list-units --all 2>/dev/null | grep -q "dnsmasq" && [ -f /etc/dnsmasq.d/unlock.conf ]; then
         has_native=true
     fi
@@ -1289,7 +1300,7 @@ uninstall_service() {
         echo -e "\n${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing Docker deployment..." || echo "卸载 Docker 部署...")${NC}"
         
         # Stop and remove container
-        if docker ps -a | grep -q "dns_unlock"; then
+        if [ "$docker_container_exists" = true ]; then
             echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Stopping container..." || echo "停止容器...")${NC}"
             docker stop dns_unlock 2>/dev/null || true
             docker rm dns_unlock 2>/dev/null || true
@@ -1297,7 +1308,7 @@ uninstall_service() {
         fi
         
         # Remove Docker image
-        if docker images | grep -q "prism-dns"; then
+        if [ "$docker_image_exists" = true ]; then
             echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing Docker image..." || echo "删除 Docker 镜像...")${NC}"
             docker rmi prism-dns:latest 2>/dev/null || true
             echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Docker image removed" || echo "Docker 镜像已删除")${NC}"
@@ -1314,6 +1325,12 @@ uninstall_service() {
     # Uninstall Native mode
     if [ "$has_native" = true ]; then
         echo -e "\n${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Removing native deployment..." || echo "卸载原生部署...")${NC}"
+        
+        # Check if dnsmasq was enabled before stopping (for later restoration)
+        local dnsmasq_was_enabled=false
+        if systemctl is-enabled dnsmasq 2>/dev/null | grep -q "enabled"; then
+            dnsmasq_was_enabled=true
+        fi
         
         # Stop services
         echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Stopping services..." || echo "停止服务...")${NC}"
@@ -1337,8 +1354,9 @@ uninstall_service() {
             echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Original config restored" || echo "原始配置已恢复")${NC}"
         fi
         
-        # Restart dnsmasq if it was running before
-        if systemctl is-enabled dnsmasq 2>/dev/null | grep -q "enabled"; then
+        # Restart dnsmasq if it was enabled before we stopped it
+        if [ "$dnsmasq_was_enabled" = true ]; then
+            systemctl enable dnsmasq 2>/dev/null || true
             systemctl start dnsmasq 2>/dev/null || true
         fi
         
@@ -1392,8 +1410,9 @@ uninstall_service() {
 # Main execution flow / 主流程
 main() {
     select_language
-    select_action
+    select_action  # Note: exits with code 0 if uninstall is selected
     
+    # If we reach here, user selected install/reinstall
     # Create working directory with secure permissions
     mkdir -p "$WORK_DIR"
     chmod 755 "$WORK_DIR" 2>/dev/null
