@@ -25,6 +25,18 @@
 
 ## 🆕 最近更新
 
+### v3.6 - 2026年1月 完整域名列表 & 路由规则修复
+
+修复了解锁无法生效的问题。确保 DNS 配置和路由规则中的域名列表完全一致：
+
+- **补全域名列表**：修复了 DNS 配置 (dnsmasq) 和 JSON 配置中域名列表不匹配的问题
+  - ChatGPT：新增 `identrust.com`, `challenges.cloudflare.com`, `intercom.io`, `intercomcdn.com`, `featuregates.org`, `statsigapi.net`, `stripe.com`
+  - 流媒体：新增 `hbomax.com`, `onetrust.com`, `bamgrid.com`, `go.com`, `pscdn.co`, `scdn.co`
+- **添加路由规则**：在 route rules 中添加 `domain_suffix` 规则，确保解锁域名的流量正确路由到 direct 出口
+- **完整解锁链路**：DNS 规则 → 解锁机 DNS → 返回解锁机 IP → 路由规则匹配 → 直连到解锁机 → SNI 代理转发
+
+> **对现有用户的影响**：如果你之前遇到解锁无法生效的问题，请重新运行脚本并更新配置。
+
 ### v3.5 - 2026年1月 DNS 路由配置修复
 
 修复了流量显示落地机地区而非解锁机地区的问题。当解锁机在香港、落地机在日本时，流媒体/AI 服务会正确显示香港地区：
