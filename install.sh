@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.2 GitHub修正版)
-#   更新日志：修复 Docker 镜像，修复语法格式，适配 GitHub Raw 调用
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.3 格式修正版)
+#   更新日志：修复 EOF 缩进导致的语法错误
 # ==========================================================
 
 RED='\033[0;31m'
@@ -68,7 +68,7 @@ install_docker() {
 
 # 4. 选择解锁模式 & 部署服务
 deploy_service() {
-    # --- 定义规则变量 (使用换行符拼接) ---
+    # --- 定义规则变量 ---
     
     # 1. ChatGPT
     CONF_GPT="address=/openai.com/$FINAL_IP
@@ -343,9 +343,7 @@ EOF
 }
 
 # 流程
-# 确保目录权限正确
 chmod 777 $WORK_DIR -R 2>/dev/null
-
 select_public_ip
 install_docker
 deploy_service
