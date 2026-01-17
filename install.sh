@@ -1096,13 +1096,20 @@ generate_json() {
     # - route.rules: Ensure traffic for these domains is routed correctly
     #   route.rules: 确保这些域名的流量被正确路由
 
+    # Validate FINAL_IP is set before generating config
+    if [ -z "$FINAL_IP" ]; then
+        echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Error: Unlock IP not set, cannot generate configuration" || echo "错误: 解锁 IP 未设置，无法生成配置")${NC}"
+        return 1
+    fi
+
     # Generate IP CIDR format based on IP version
+    # IPv6 addresses always contain colons, IPv4 never does
     local IP_CIDR
     if [[ "$FINAL_IP" == *":"* ]]; then
-        # IPv6 address
+        # IPv6 address (validated by validate_ip function earlier)
         IP_CIDR="${FINAL_IP}/128"
     else
-        # IPv4 address
+        # IPv4 address (validated by validate_ip function earlier)
         IP_CIDR="${FINAL_IP}/32"
     fi
 
