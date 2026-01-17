@@ -305,9 +305,8 @@ verify_services() {
         fi
     # 降级使用 nslookup
     elif command -v nslookup &> /dev/null; then
-        # 使用更可靠的解析方法：提取非服务器地址的最后一个 Address
+        # 使用更可靠的解析方法：过滤掉服务器信息行，提取域名解析结果
         DNS_OUTPUT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null)
-        # 跳过第一行（通常是 DNS 服务器地址），获取解析结果
         DNS_RESULT=$(echo "$DNS_OUTPUT" | grep -v "^Server:" | grep "Address:" | tail -1 | awk '{print $2}' | tr -d '#')
         
         if [ "$DNS_RESULT" == "$FINAL_IP" ]; then

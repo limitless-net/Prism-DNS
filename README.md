@@ -102,8 +102,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 
 4. **测试 DNS 解析**
    ```bash
-   # 从落地机测试（将 UNLOCK_IP 替换为你的解锁机 IP）
-   nslookup openai.com UNLOCK_IP
+   # 从落地机测试（将 <解锁机IP> 替换为你的解锁机 IP 地址）
+   nslookup openai.com <解锁机IP>
    # 应该返回解锁机的 IP 地址
    ```
 
@@ -122,8 +122,8 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 
 2. **检查 DNS 劫持**
    ```bash
-   # 在落地机上测试
-   nslookup netflix.com 你的解锁机IP
+   # 在落地机上测试（将 <解锁机IP> 替换为你的解锁机 IP 地址）
+   nslookup netflix.com <解锁机IP>
    # 应该返回解锁机 IP，而不是 Netflix 真实 IP
    ```
 
@@ -150,7 +150,7 @@ A: 可以。在配置防火墙白名单时，输入多个落地机 IP（空格�
 **Q: 如何验证解锁是否正常工作？**
 A: 
 - 查看日志：`docker logs -f dns_unlock`
-- DNS 测试：`nslookup openai.com 你的解锁机IP`
+- DNS 测试：`nslookup openai.com <解锁机IP>`（替换为实际IP地址）
 - 实际访问：连接落地节点后访问 Netflix、ChatGPT 等服务
 
 **Q: 修改了解锁模式如何更新？**
