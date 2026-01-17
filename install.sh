@@ -264,19 +264,19 @@ verify_services() {
     
     # 检查端口监听
     echo -e "\n${YELLOW}检查端口监听状态：${NC}"
-    if netstat -tuln 2>/dev/null | grep -E ':53[[:space:]]' || ss -tuln 2>/dev/null | grep -E ':53[[:space:]]'; then
+    if netstat -tuln 2>/dev/null | grep -E ':53([[:space:]]|$)' || ss -tuln 2>/dev/null | grep -E ':53([[:space:]]|$)'; then
         echo -e "${GREEN}✓ DNS 端口 (53) 正常监听${NC}"
     else
         echo -e "${RED}✗ DNS 端口 (53) 未监听${NC}"
     fi
     
-    if netstat -tuln 2>/dev/null | grep -E ':80[[:space:]]' || ss -tuln 2>/dev/null | grep -E ':80[[:space:]]'; then
+    if netstat -tuln 2>/dev/null | grep -E ':80([[:space:]]|$)' || ss -tuln 2>/dev/null | grep -E ':80([[:space:]]|$)'; then
         echo -e "${GREEN}✓ HTTP 端口 (80) 正常监听${NC}"
     else
         echo -e "${RED}✗ HTTP 端口 (80) 未监听${NC}"
     fi
     
-    if netstat -tuln 2>/dev/null | grep -E ':443[[:space:]]' || ss -tuln 2>/dev/null | grep -E ':443[[:space:]]'; then
+    if netstat -tuln 2>/dev/null | grep -E ':443([[:space:]]|$)' || ss -tuln 2>/dev/null | grep -E ':443([[:space:]]|$)'; then
         echo -e "${GREEN}✓ HTTPS 端口 (443) 正常监听${NC}"
     else
         echo -e "${RED}✗ HTTPS 端口 (443) 未监听${NC}"
@@ -293,14 +293,22 @@ verify_services() {
         fi
     fi
     
-    # 检查 nslookup 是否可用
-    if command -v nslookup &> /dev/null; then
-        DNS_RESULT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null | grep -A1 "Name:" | grep "Address:" | tail -1 | awk '{print $2}')
+    # 优先使用 dig (更可靠)
+    if command -v dig &> /dev/null; then
+        DNS_RESULT=$(dig +short @$FINAL_IP $TEST_DOMAIN 2>/dev/null | tail -1)
         
-        # 如果没有找到，尝试另一种格式
-        if [ -z "$DNS_RESULT" ]; then
-            DNS_RESULT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null | grep "^Address:" | tail -1 | awk '{print $2}')
+        if [ "$DNS_RESULT" == "$FINAL_IP" ]; then
+            echo -e "${GREEN}✓ DNS 劫持配置正确 ($TEST_DOMAIN -> $FINAL_IP)${NC}"
+        else
+            echo -e "${YELLOW}⚠ DNS 测试: $TEST_DOMAIN 解析为 $DNS_RESULT${NC}"
+            echo -e "${YELLOW}  提示: 等待 Docker 服务完全启动后，可手动测试: dig +short @$FINAL_IP $TEST_DOMAIN${NC}"
         fi
+    # 降级使用 nslookup
+    elif command -v nslookup &> /dev/null; then
+        # 使用更可靠的解析方法：提取非服务器地址的最后一个 Address
+        DNS_OUTPUT=$(nslookup $TEST_DOMAIN $FINAL_IP 2>/dev/null)
+        # 跳过第一行（通常是 DNS 服务器地址），获取解析结果
+        DNS_RESULT=$(echo "$DNS_OUTPUT" | grep -v "^Server:" | grep "Address:" | tail -1 | awk '{print $2}' | tr -d '#')
         
         if [ "$DNS_RESULT" == "$FINAL_IP" ]; then
             echo -e "${GREEN}✓ DNS 劫持配置正确 ($TEST_DOMAIN -> $FINAL_IP)${NC}"
@@ -309,8 +317,8 @@ verify_services() {
             echo -e "${YELLOW}  提示: 等待 Docker 服务完全启动后，可手动测试: nslookup $TEST_DOMAIN $FINAL_IP${NC}"
         fi
     else
-        echo -e "${YELLOW}⚠ nslookup 未安装，跳过 DNS 解析测试${NC}"
-        echo -e "${YELLOW}  可手动安装后测试: apt install -y dnsutils && nslookup $TEST_DOMAIN $FINAL_IP${NC}"
+        echo -e "${YELLOW}⚠ dig/nslookup 未安装，跳过 DNS 解析测试${NC}"
+        echo -e "${YELLOW}  可手动安装后测试: apt install -y dnsutils && dig +short @$FINAL_IP $TEST_DOMAIN${NC}"
     fi
     
     return 0
