@@ -1084,7 +1084,7 @@ generate_json() {
     echo -e "${YELLOW}"
 
     # Route rules description / 路由规则说明:
-    # 1. Unlock domains routed to direct (via DNS hijack to unlock server) / 解锁域名走 direct（通过 DNS 劫持到解锁机）
+    # 1. Unlock domains routed to unlock outbound (via DNS hijack to unlock server) / 解锁域名走 unlock 出站（通过 DNS 劫持到解锁机）
     # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
     # 3. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
     # 4. All other traffic goes direct via UDP/TCP / 其他所有流量通过 UDP/TCP 走 direct
@@ -1128,6 +1128,14 @@ generate_json() {
       }
     },
     {
+      "tag": "unlock",
+      "type": "direct",
+      "domain_resolver": {
+        "server": "unlock_dns",
+        "strategy": "prefer_ipv4"
+      }
+    },
+    {
       "type": "block",
       "tag": "block"
     }
@@ -1136,7 +1144,7 @@ generate_json() {
     "rules": [
       {
         "domain_suffix": [${FINAL_JSON_LIST}],
-        "outbound": "direct"
+        "outbound": "unlock"
       },
       {
         "ip_is_private": true,
@@ -1242,7 +1250,7 @@ print_instructions() {
    3. DNS rules in JSON route query to unlock server (not 1.1.1.1)
    4. Unlock server returns its own IP: HK_IP
    5. Landing node connects to HK_IP (thinks it's Netflix)
-   6. Route rules match netflix.com domain → use direct outbound
+   6. Route rules match netflix.com domain → use unlock outbound
    7. SNI proxy on unlock server forwards to real Netflix
    8. Netflix sees Hong Kong IP ✓
 
@@ -1356,7 +1364,7 @@ EOF
    3. JSON 中的 DNS 规则将查询路由到解锁机 (不是 1.1.1.1)
    4. 解锁机返回自己的 IP: HK_IP
    5. 落地节点连接到 HK_IP (以为是 Netflix)
-   6. 路由规则匹配 netflix.com 域名 → 使用 direct 出站
+   6. 路由规则匹配 netflix.com 域名 → 使用 unlock 出站
    7. 解锁机上的 SNI 代理转发到真实的 Netflix
    8. Netflix 看到香港 IP ✓
 
