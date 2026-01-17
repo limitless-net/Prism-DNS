@@ -461,8 +461,9 @@ install_native() {
     local pid=$!
     spinner $pid "Updating package list / 更新软件包列表..."
     wait $pid
+    local update_status=$?
     
-    if [ $? -ne 0 ]; then
+    if [ $update_status -ne 0 ]; then
         echo -e "${YELLOW}⚠ $([ "$LANG_CHOICE" = "en" ] && echo "Package update had warnings, continuing..." || echo "软件包更新有警告，继续...")${NC}"
     else
         echo -e "${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Package list updated" || echo "软件包列表已更新")${NC}"
@@ -794,6 +795,8 @@ EOL
     echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Building and starting service..." || echo "正在构建并启动服务...")${NC}"
     docker compose down 2>/dev/null
     
+    # Show real-time progress during Docker build to avoid appearing frozen
+    # Capture build output and status
     echo -e "${YELLOW}Step 1/2: Building Docker image / 步骤 1/2: 构建镜像${NC}"
     if [ "$LANG_CHOICE" = "en" ]; then
         echo -e "${SKY}This may take 1-3 minutes depending on network speed. Please wait...${NC}"
@@ -801,17 +804,33 @@ EOL
         echo -e "${SKY}这可能需要 1-3 分钟，具体取决于网络速度。请稍候...${NC}"
     fi
     
-    # Show real-time progress during Docker build to avoid appearing frozen
-    # Use a temporary variable to capture build status
-    set -o pipefail
-    docker compose build 2>&1 | while IFS= read -r line; do
-        # Show step progress and important messages
-        if echo "$line" | grep -qE "(Step|#[0-9]|Successfully|ERROR|DONE|downloading|extracting)"; then
-            echo "$line"
-        fi
-    done
+    # Create temp file for capturing build output
+    local build_log=$(mktemp)
+    docker compose build > "$build_log" 2>&1 &
+    local build_pid=$!
+    
+    # Show progress while build is running
+    (
+        tail -f "$build_log" 2>/dev/null | while IFS= read -r line; do
+            # Show step progress and important messages
+            if echo "$line" | grep -qE "(Step|#[0-9]|Successfully|ERROR|DONE|downloading|extracting)"; then
+                echo "$line"
+            fi
+        done
+    ) &
+    local tail_pid=$!
+    
+    # Wait for build to complete
+    wait $build_pid
     local build_status=$?
-    set +o pipefail
+    
+    # Stop the tail process
+    kill $tail_pid 2>/dev/null || true
+    wait $tail_pid 2>/dev/null || true
+    
+    # Show any remaining important messages
+    grep -E "(Successfully|ERROR)" "$build_log" 2>/dev/null || true
+    rm -f "$build_log"
     
     # Check if build succeeded
     if [ $build_status -ne 0 ]; then
@@ -1269,7 +1288,7 @@ EOF
         echo -e "     (Should return: ${YELLOW}${FINAL_IP}${NC})"
         cat <<'EOF'
      This test confirms DNS hijacking is working correctly.
-     If it returns real OpenAI IP instead of unlock server IP,
+     If it returns real OpenAI IP address instead of unlock server IP,
      the DNS configuration has a problem.
    
    Method 4 - Test from landing server:
