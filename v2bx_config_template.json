@@ -1,84 +1,78 @@
 {
+  "log": {
+    "level": "warning",
+    "timestamp": true
+  },
   "dns": {
     "servers": [
       {
-        "tag": "cf",
-        "address": "1.1.1.1"
+        "tag": "local_dns",
+        "address": "1.1.1.1",
+        "detour": "direct"
       }
     ],
-    "strategy": "prefer_ipv4"
+    "final": "local_dns",
+    "strategy": "prefer_ipv4",
+    "disable_cache": false
   },
+  "inbounds": [
+    {
+      "type": "direct",
+      "tag": "in-0"
+    }
+  ],
   "outbounds": [
     {
       "tag": "direct",
       "type": "direct"
     },
     {
-      "type": "block",
-      "tag": "block"
+      "tag": "block",
+      "type": "block"
     }
   ],
   "route": {
     "rules": [
       {
-        "ip_is_private": true,
+        "protocol": "dns",
+        "outbound": "direct"
+      },
+      {
+        "protocol": "quic",
         "outbound": "block"
       },
       {
-        "domain_keyword": ["torrent", "peer_id=", "info_hash", "get_peers", "find_node", "BitTorrent", "announce_peer", "magnet:", "bt_key", "ed2k", "xunlei", "sandai", "Thunder", "XLLiveUD", "qqpcmgr", "QQPCMGR"],
+        "protocol": "bittorrent",
         "outbound": "block"
       },
       {
         "domain_suffix": [
-          "360.cn", "360.com", "360.net", "so.cn", "so.com",
-          "map.baidu.com", "map.n.shifen.com",
-          "guerrillamail.info", "guerrillamail.biz", "guerrillamail.com", "guerrillamail.de", "guerrillamail.net", "guerrillamail.org", "guerrillamail.me", "guerrillamail.la",
-          "guerrillamailblock.com", "sharklasers.com", "grr.la", "pokemail.net", "spam4.me", "bccto.me", "chacuo.net", "027168.com",
-          "dafahao.org", "dafahao.com", "dafahao.net", "mingjinglive.org", "mingjinglive.com", "mingjinglive.net",
-          "botanwang.org", "botanwang.com", "botanwang.net", "minghui.org", "minghui.com", "minghui.net",
-          "dongtaiwang.org", "dongtaiwang.com", "dongtaiwang.net", "falunaz.org", "falunaz.com", "falunaz.net",
-          "epochtimes.org", "epochtimes.com", "epochtimes.net", "ntdtv.org", "ntdtv.com", "ntdtv.net",
-          "falundafa.org", "falundafa.com", "falundafa.net", "falungong.org", "falungong.com", "falungong.net",
-          "wujieliulan.org", "wujieliulan.com", "wujieliulan.net", "zhengjian.org", "zhengjian.com", "zhengjian.net",
-          "guanjia.qq.com",
-          "rising.com", "rising.net", "rising.org", "kingsoft.com", "kingsoft.net", "kingsoft.org",
-          "duba.com", "duba.net", "duba.org", "xindubawukong.com", "jinshanduba.com", "jinshanduba.net", "jinshanduba.org",
-          "netvigator.com", "netvigator.cn", "netvigator.net", "netvigator.org",
-          "torproject.com", "torproject.cn", "torproject.net", "torproject.org",
-          "12377.cn", "12315.cn", "talk.news.pts.org.tw", "creaders.net", "zhuichaguoji.org", "efcc.org.hk",
-          "cyberpolice.cn", "aboluowang.com", "tuidang.org", "110.qq.com", "mingjingnews.com", "inmediahk.net",
-          "xinsheng.net", "breakgfw.com", "chengmingmag.com", "jinpianwang.com", "qi-gong.me", "mhradio.org",
-          "edoors.com", "renminbao.com", "soundofhope.org", "xizang-zhiye.org", "bannedbook.org", "12321.cn",
-          "secretchina.com", "dajiyuan.com", "dajiyuan.eu", "boxun.com", "chinadigitaltimes.net", "dwnews.com",
-          "huaglad.com", "oneplusnews.com", "epochweekly.com", "cn.rfi.fr",
-          "miaozhen.cn", "miaozhen.com", "cnzz.cn", "cnzz.com", "talkingdata.cn", "talkingdata.com", "umeng.cn", "umeng.com",
-          "mycard.com", "mycard.tw", "gash.com", "gash.tw",
-          "pincong.rocks", "taobao.com",
-          "laomoe.com", "laomoe.cloud", "laomoe.fun", "laomoe.cn", "laomoe.gs", "laomoe.xyz", "laomoe.cc",
-          "jiyou.com", "jiyou.cloud", "jiyou.fun", "jiyou.cn", "jiyou.gs", "jiyou.xyz", "jiyou.cc",
-          "ssss.fun", "ssss.cc",
-          "lolicp.com", "lolicp.cloud", "lolicp.fun", "lolicp.cn", "lolicp.gs", "lolicp.xyz", "lolicp.cc",
-          "vv1234.com", "vv1234.cloud", "vv1234.fun", "vv1234.cn", "vv1234.gs", "vv1234.xyz", "vv1234.cc",
-          "0z.cc",
-          "4321q.com", "4321q.cloud", "4321q.fun", "4321q.cn", "4321q.gs", "4321q.xyz", "4321q.cc",
-          "868123.com", "868123.cloud", "868123.fun", "868123.cn", "868123.gs", "868123.xyz", "868123.cc",
-          "ksweb.com", "ksweb.cloud", "ksweb.fun", "ksweb.cn", "ksweb.gs", "ksweb.xyz", "ksweb.cc",
-          "mm126.com", "mm126.cloud", "mm126.fun", "mm126.cn", "mm126.gs", "mm126.xyz", "mm126.cc",
-          "flows.pages.dev", "miaoko.pages.dev"
+          "cn", 
+          "baidu.com", "qq.com", "taobao.com", "jd.com", 
+          "163.com", "126.com", "bilibili.com", "iqiyi.com", 
+          "youku.com", "zhihu.com", "weibo.com", "sina.com.cn", 
+          "sohu.com", "douyin.com", "meituan.com", "dianping.com", 
+          "360.cn", "360.com", "aliyun.com", "tencent.com", 
+          "xiaohongshu.com", "csdn.net",
+          "falundafa.org", "minghui.org", "epochtimes.com", "ntdtv.com", 
+          "dongtaiwang.com", "bannedbook.org", "pincong.rocks", "dajiyuan.com", 
+          "shenyun.com", "wujieliulan.com", "zhengjian.org", "chinadigitaltimes.net", 
+          "boxun.com", "creaders.net", "aboluowang.com", "tuidang.org", 
+          "guerrillamail.com", "guerrillamail.info", "guerrillamail.biz", 
+          "guerrillamail.net", "guerrillamail.org", "sharklasers.com", 
+          "pokemail.net", "spam4.me", "bccto.me", "chacuo.net"
         ],
         "outbound": "block"
       },
       {
+        "ip_is_private": true,
+        "outbound": "block"
+      },
+      {
         "outbound": "direct",
-        "network": [
-          "udp","tcp"
-        ]
+        "network": ["udp", "tcp"]
       }
-    ]
-  },
-  "experimental": {
-    "cache_file": {
-      "enabled": true
-    }
+    ],
+    "auto_detect_interface": false
   }
 }
