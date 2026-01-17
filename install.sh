@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.1 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.2 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V4.1)
+#   Prism-DNS Unlock Service Setup Script (V4.2)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
@@ -1091,6 +1091,12 @@ generate_json() {
     # 该服务器返回解锁服务器的 IP。流量然后通过 direct 出站到达该 IP，
     # 解锁服务器上的 SNI 代理将其转发到实际目的地。
     #
+    # DNS cache settings / DNS 缓存设置:
+    # - Global disable_cache: false (normal domains use cache for speed)
+    #   全局 disable_cache: false（普通域名使用缓存以提高速度）
+    # - Unlock rule disable_cache: true (unlock domains always query fresh IP)
+    #   解锁规则 disable_cache: true（解锁域名始终查询最新 IP）
+    #
     # 1. Unlock domains routed to direct outbound (DNS hijacked to unlock server IP) / 解锁域名走 direct 出站（DNS 劫持到解锁机 IP）
     # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
     # 3. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
@@ -1149,7 +1155,7 @@ generate_json() {
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4",
-    "disable_cache": true
+    "disable_cache": false
   },
   "inbounds": [
     {
