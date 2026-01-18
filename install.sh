@@ -1,10 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V22.2 UI修复版)
+#   V2bX 专用解锁服务总控脚本 (V23.0 完美最终版)
 #   
-#   修复日志：
-#   1. [UI] 统一菜单颜色为黄色，解决蓝色在部分终端看不清的问题
-#   2. [核心] 保持 V22.1 的所有功能 (白名单管理、容灾、审计、监控)
+#   更新日志：
+#   1. [修复] 自动放行本地回环接口 (lo)，修复本机自测超时问题
+#   2. [集成] 包含之前所有的修复 (端口猎杀、白名单管理、容灾DNS)
+#   3. [稳定] 这是最推荐的长期使用版本
 # ==========================================================
 
 RED='\033[0;31m'
@@ -46,6 +47,7 @@ install_base_tools() {
 
 validate_ip() {
     local ip="$1"
+    ip=$(echo "$ip" | tr -d '[:space:]')
     if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
     if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then return 0; fi
     return 1
@@ -86,11 +88,17 @@ force_cleanup() {
 }
 
 # ==========================================================
-# 防火墙逻辑
+# 防火墙逻辑 (已修复回环问题)
 # ==========================================================
 
 apply_firewall() {
     echo -e "${YELLOW}>>> 正在刷新防火墙规则...${NC}"
+    
+    # 格式化白名单
+    sed -i 's/\r//g' "$WHITELIST_FILE"
+    sed -i 's/ //g' "$WHITELIST_FILE"
+    sed -i '/^$/d' "$WHITELIST_FILE"
+    
     local ips
     ips=$(cat "$WHITELIST_FILE")
     
@@ -101,32 +109,45 @@ apply_firewall() {
         ufw delete allow 53/udp >/dev/null 2>&1
         ufw delete allow 80/tcp >/dev/null 2>&1
         ufw delete allow 443/tcp >/dev/null 2>&1
+        
         for ip in $ips; do
-            ufw allow from "$ip" to any port 53 >/dev/null
-            ufw allow from "$ip" to any port 80 >/dev/null
-            ufw allow from "$ip" to any port 443 >/dev/null
+            if validate_ip "$ip"; then
+                ufw allow from "$ip" to any port 53 >/dev/null
+                ufw allow from "$ip" to any port 80 >/dev/null
+                ufw allow from "$ip" to any port 443 >/dev/null
+            fi
         done
         echo "y" | ufw enable >/dev/null
         ufw reload >/dev/null
     else
+        # Iptables 逻辑
         iptables -N UNLOCK_FW 2>/dev/null
         iptables -F UNLOCK_FW 
-        iptables -D INPUT -j UNLOCK_FW 2>/dev/null
+        while iptables -D INPUT -j UNLOCK_FW 2>/dev/null; do :; done
         iptables -I INPUT -j UNLOCK_FW
-        for ip in $ips; do
-            iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 53 -j ACCEPT
-            iptables -A UNLOCK_FW -s "$ip" -p udp --dport 53 -j ACCEPT
-            iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 80 -j ACCEPT
-            iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 443 -j ACCEPT
-        done
+        
+        # 1. 【关键修复】放行本地回环接口 (解决本机自测超时)
+        iptables -A UNLOCK_FW -i lo -j ACCEPT
         iptables -A UNLOCK_FW -s 127.0.0.1 -j ACCEPT
+        
+        # 2. 放行白名单
+        for ip in $ips; do
+            if validate_ip "$ip"; then
+                iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 53 -j ACCEPT
+                iptables -A UNLOCK_FW -s "$ip" -p udp --dport 53 -j ACCEPT
+                iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 80 -j ACCEPT
+                iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 443 -j ACCEPT
+            fi
+        done
+        
+        # 3. 拦截其他
         iptables -A UNLOCK_FW -p tcp --dport 53 -j DROP
         iptables -A UNLOCK_FW -p udp --dport 53 -j DROP
         iptables -A UNLOCK_FW -p tcp --dport 80 -j DROP
         iptables -A UNLOCK_FW -p tcp --dport 443 -j DROP
         iptables -A UNLOCK_FW -j RETURN
     fi
-    echo -e "${GREEN}防火墙规则已生效！${NC}"
+    echo -e "${GREEN}防火墙规则已生效！(已自动放行本机回环测试)${NC}"
 }
 
 manage_whitelist() {
@@ -136,7 +157,14 @@ manage_whitelist() {
         echo -e "当前规则: 默认拒绝所有，仅允许以下 IP"
         echo -e "----------------------------------------"
         if [ -s "$WHITELIST_FILE" ]; then
-            cat -n "$WHITELIST_FILE" | sed "s/^/  ${GREEN}/;s/$/${NC}/"
+            i=1
+            while IFS= read -r line; do
+                clean_line=$(echo "$line" | tr -d '\r' | tr -d ' ')
+                if [ -n "$clean_line" ]; then
+                    echo -e "  ${YELLOW}$i)${NC} ${GREEN}$clean_line${NC}"
+                    ((i++))
+                fi
+            done < "$WHITELIST_FILE"
         else
             echo -e "  ${RED}(空) - 当前任何人无法连接，请添加 IP！${NC}"
         fi
@@ -154,18 +182,28 @@ manage_whitelist() {
                 read -p ">> " new_ips
                 new_ips=${new_ips//,/ }
                 for ip in $new_ips; do
+                    ip=$(echo "$ip" | tr -d '[:space:]')
                     if validate_ip "$ip"; then
                         if ! grep -q "^$ip$" "$WHITELIST_FILE"; then
                             echo "$ip" >> "$WHITELIST_FILE"
                             echo -e "添加: ${GREEN}$ip${NC}"
+                        else
+                            echo -e "跳过: $ip (已存在)"
                         fi
+                    else
+                        echo -e "${RED}无效 IP: $ip${NC}"
                     fi
                 done
                 sort -u "$WHITELIST_FILE" -o "$WHITELIST_FILE"
+                read -p "按回车继续..."
                 ;;
             2)
                 read -p "请输入要删除的 IP: " del_ip
-                if [ -n "$del_ip" ]; then sed -i "/^$del_ip$/d" "$WHITELIST_FILE"; echo -e "${GREEN}已删除 $del_ip${NC}"; fi
+                del_ip=$(echo "$del_ip" | tr -d '[:space:]')
+                if [ -n "$del_ip" ]; then 
+                    grep -v "^$del_ip$" "$WHITELIST_FILE" > "${WHITELIST_FILE}.tmp" && mv "${WHITELIST_FILE}.tmp" "$WHITELIST_FILE"
+                    echo -e "${GREEN}已执行删除操作${NC}"
+                fi
                 read -p "按回车继续..."
                 ;;
             3) > "$WHITELIST_FILE"; echo -e "${GREEN}已清空${NC}";;
@@ -409,12 +447,16 @@ EOF
         docker compose up -d --build --remove-orphans
     fi
 
+    # 安装完成后，自动应用白名单规则（防止裸奔）
+    if [ -s "$WHITELIST_FILE" ]; then
+        apply_firewall
+    fi
+
     save_config
     echo -e "${GREEN}安装完成!${NC}"
     check_status
 }
 
-# 1. 修改解锁规则 (热更新)
 modify_services() {
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     echo -e "${SKY}>>> 修改解锁规则 (无需重装)${NC}"
@@ -434,7 +476,6 @@ modify_services() {
     if [[ "$view_json" == "y" ]]; then gen_json; fi
 }
 
-# 2. 重启服务
 restart_services() {
     echo -e "${SKY}>>> 正在重启服务...${NC}"
     if [ "$DEPLOY_MODE" == "native" ]; then
@@ -454,7 +495,6 @@ restart_services() {
     read -p "按回车返回..." _
 }
 
-# 3. 实时流量监控
 monitor_traffic() {
     if [ -z "$DEPLOY_MODE" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     clear
@@ -521,6 +561,12 @@ uninstall_all() {
     if command -v docker &> /dev/null; then docker rm -f dns_unlock sniproxy_unlock 2>/dev/null; fi
     systemctl stop dnsmasq sniproxy 2>/dev/null
     rm -rf "$WORK_DIR"
+    # 清理防火墙
+    if command -v iptables &> /dev/null; then
+        iptables -D INPUT -j UNLOCK_FW 2>/dev/null
+        iptables -F UNLOCK_FW 2>/dev/null
+        iptables -X UNLOCK_FW 2>/dev/null
+    fi
     echo -e "${GREEN}卸载完成${NC}"
     read -p "按回车返回..." _
 }
@@ -560,7 +606,7 @@ gen_json() {
     "servers": [
       {
         "tag": "unlock_dns",
-        "address": "${FINAL_IP}",
+        "address": "tcp://${FINAL_IP}",
         "address_resolver": "local_dns",
         "detour": "direct"
       },
@@ -574,14 +620,15 @@ gen_json() {
       {
         "domain_suffix": [${FINAL_JSON_LIST}],
         "server": "unlock_dns",
-        "disable_cache": true
+        "disable_cache": true,
+        "query_type": ["A"]
       }
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4"
   },
   "outbounds": [
-    { "tag": "direct", "type": "direct" },
+    { "tag": "direct", "type": "direct", "domain_strategy": "prefer_ipv4" },
     { "tag": "block", "type": "block" }
   ],
   "route": {
@@ -621,7 +668,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.2 UI修复版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V23.0 完美最终版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
