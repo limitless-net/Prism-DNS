@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V4.3 GitHub版)
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.8 GitHub版)
 #   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V4.3)
+#   Prism-DNS Unlock Service Setup Script (V3.8)
 #   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
 # ==========================================================
 
@@ -615,7 +615,7 @@ deploy_service() {
     
     # --- Define rules / 定义规则变量 ---
     
-    # 1. ChatGPT (expanded domain list to prevent intermittent failures)
+    # 1. ChatGPT
     CONF_GPT="address=/openai.com/$FINAL_IP
 address=/chatgpt.com/$FINAL_IP
 address=/oaistatic.com/$FINAL_IP
@@ -629,16 +629,8 @@ address=/intercom.io/$FINAL_IP
 address=/intercomcdn.com/$FINAL_IP
 address=/featuregates.org/$FINAL_IP
 address=/statsigapi.net/$FINAL_IP
-address=/stripe.com/$FINAL_IP
-address=/openaiapi-site.azureedge.net/$FINAL_IP
-address=/client.crisp.chat/$FINAL_IP
-address=/livekit.cloud/$FINAL_IP
-address=/launchdarkly.com/$FINAL_IP
-address=/cloudflareinsights.com/$FINAL_IP
-address=/clarity.ms/$FINAL_IP
-address=/hcaptcha.com/$FINAL_IP
-address=/turnstile.com/$FINAL_IP"
-    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "identrust.com", "challenges.cloudflare.com", "ai.com", "intercom.io", "intercomcdn.com", "featuregates.org", "statsigapi.net", "stripe.com", "openaiapi-site.azureedge.net", "client.crisp.chat", "livekit.cloud", "launchdarkly.com", "cloudflareinsights.com", "clarity.ms", "hcaptcha.com", "turnstile.com"'
+address=/stripe.com/$FINAL_IP"
+    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "identrust.com", "challenges.cloudflare.com", "ai.com", "intercom.io", "intercomcdn.com", "featuregates.org", "statsigapi.net", "stripe.com"'
 
     # 2. Gemini
     CONF_GEMINI="address=/bard.google.com/$FINAL_IP
@@ -669,14 +661,13 @@ address=/muscdn.com/$FINAL_IP
 address=/musical.ly/$FINAL_IP"
     JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "ipstatp.com", "muscdn.com", "musical.ly"'
 
-    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO) - expanded domain list
+    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO)
     CONF_STREAMING="address=/netflix.com/$FINAL_IP
 address=/netflix.net/$FINAL_IP
 address=/nflximg.net/$FINAL_IP
 address=/nflxvideo.net/$FINAL_IP
 address=/nflxso.net/$FINAL_IP
 address=/nflxext.com/$FINAL_IP
-address=/nflxext.net/$FINAL_IP
 address=/disney.com/$FINAL_IP
 address=/disneyplus.com/$FINAL_IP
 address=/dssott.com/$FINAL_IP
@@ -688,13 +679,8 @@ address=/hbogo.com/$FINAL_IP
 address=/hbomax.com/$FINAL_IP
 address=/onetrust.com/$FINAL_IP
 address=/bamgrid.com/$FINAL_IP
-address=/go.com/$FINAL_IP
-address=/max.com/$FINAL_IP
-address=/disneynow.com/$FINAL_IP
-address=/disneystreaming.com/$FINAL_IP
-address=/starplus.com/$FINAL_IP
-address=/d23.com/$FINAL_IP"
-    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "nflxext.net", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "pscdn.co", "scdn.co", "hbo.com", "hbogo.com", "hbomax.com", "onetrust.com", "bamgrid.com", "go.com", "max.com", "disneynow.com", "disneystreaming.com", "starplus.com", "d23.com"'
+address=/go.com/$FINAL_IP"
+    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "pscdn.co", "scdn.co", "hbo.com", "hbogo.com", "hbomax.com", "onetrust.com", "bamgrid.com", "go.com"'
 
     # --- Menu / 菜单 ---
     if [ "$LANG_CHOICE" = "en" ]; then
@@ -1098,22 +1084,7 @@ generate_json() {
     echo -e "${YELLOW}"
 
     # Route rules description / 路由规则说明:
-    # The unlock works by DNS hijacking: DNS queries for unlock domains are sent to unlock_dns server,
-    # which returns the unlock server's IP. The traffic then goes through direct outbound to that IP,
-    # where SNI proxy on the unlock server forwards it to the actual destination.
-    # 解锁工作原理是 DNS 劫持：解锁域名的 DNS 查询发送到 unlock_dns 服务器，
-    # 该服务器返回解锁服务器的 IP。流量然后通过 direct 出站到达该 IP，
-    # 解锁服务器上的 SNI 代理将其转发到实际目的地。
-    #
-    # DNS cache settings / DNS 缓存设置:
-    # - Global disable_cache: false (normal domains use cache for speed)
-    #   全局 disable_cache: false（普通域名使用缓存以提高速度）
-    # - Unlock rule disable_cache: true (unlock domains always query fresh IP)
-    #   解锁规则 disable_cache: true（解锁域名始终查询最新 IP）
-    # - independent_cache: true (prevents DNS response pollution between servers)
-    #   independent_cache: true（防止不同 DNS 服务器之间的响应污染，减少断流）
-    #
-    # 1. Unlock domains routed to direct outbound (DNS hijacked to unlock server IP) / 解锁域名走 direct 出站（DNS 劫持到解锁机 IP）
+    # 1. Unlock domains routed to unlock outbound (via DNS hijack to unlock server) / 解锁域名走 unlock 出站（通过 DNS 劫持到解锁机）
     # 2. Private IP traffic blocked / 私有 IP 流量被屏蔽
     # 3. Audit rule matched traffic blocked (BT, return to China traffic, etc.) / 审计规则匹配的流量被屏蔽 (BT、回国流量等)
     # 4. All other traffic goes direct via UDP/TCP / 其他所有流量通过 UDP/TCP 走 direct
@@ -1122,8 +1093,8 @@ generate_json() {
     # 注意：domain_suffix 同时出现在 dns.rules 和 route.rules 中是有意为之：
     # - dns.rules: Route DNS queries to unlock_dns (returns unlock server IP)
     #   dns.rules: 将 DNS 查询路由到解锁机（返回解锁机 IP）
-    # - route.rules: Ensure traffic for these domains is routed to direct outbound
-    #   route.rules: 确保这些域名的流量被路由到 direct 出站
+    # - route.rules: Ensure traffic for these domains is routed correctly
+    #   route.rules: 确保这些域名的流量被正确路由
 
     # Validate FINAL_IP is set before generating config
     if [ -z "$FINAL_IP" ]; then
@@ -1144,10 +1115,6 @@ generate_json() {
 
     cat <<EOF
 {
-  "log": {
-    "level": "info",
-    "timestamp": true
-  },
   "dns": {
     "servers": [
       {
@@ -1171,23 +1138,16 @@ generate_json() {
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4",
-    "disable_cache": false,
-    "independent_cache": true
+    "disable_cache": false
   },
-  "inbounds": [
-    {
-      "type": "direct",
-      "tag": "in-0"
-    }
-  ],
   "outbounds": [
     {
       "tag": "direct",
       "type": "direct"
     },
     {
-      "tag": "block",
-      "type": "block"
+      "type": "block",
+      "tag": "block"
     }
   ],
   "route": {
@@ -1205,29 +1165,6 @@ generate_json() {
         "outbound": "block"
       },
       {
-        "protocol": "bittorrent",
-        "outbound": "block"
-      },
-      {
-        "domain_suffix": [
-          "cn", 
-          "baidu.com", "qq.com", "taobao.com", "jd.com", 
-          "163.com", "126.com", "bilibili.com", "iqiyi.com", 
-          "youku.com", "zhihu.com", "weibo.com", "sina.com.cn", 
-          "sohu.com", "douyin.com", "meituan.com", "dianping.com", 
-          "360.cn", "360.com", "aliyun.com", "tencent.com", 
-          "xiaohongshu.com", "csdn.net",
-          "falundafa.org", "minghui.org", "epochtimes.com", "ntdtv.com", 
-          "dongtaiwang.com", "bannedbook.org", "pincong.rocks", "dajiyuan.com", 
-          "shenyun.com", "wujieliulan.com", "zhengjian.org", "chinadigitaltimes.net", 
-          "boxun.com", "creaders.net", "aboluowang.com", "tuidang.org", 
-          "guerrillamail.com", "guerrillamail.info", "guerrillamail.biz", 
-          "guerrillamail.net", "guerrillamail.org", "sharklasers.com", 
-          "pokemail.net", "spam4.me", "bccto.me", "chacuo.net"
-        ],
-        "outbound": "block"
-      },
-      {
         "domain_suffix": [${FINAL_JSON_LIST}],
         "outbound": "direct"
       },
@@ -1236,11 +1173,45 @@ generate_json() {
         "outbound": "block"
       },
       {
+        "domain_regex": [
+            "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
+            "(.+.|^)(360|so).(cn|com)",
+            "(Subject|HELO|SMTP)",
+            "(torrent|.torrent|peer_id=|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=)",
+            "(^.@)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168).(info|biz|com|de|net|org|me|la)",
+            "(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
+            "(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
+            "(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)",
+            "(.+.|^)(360).(cn|com|net)",
+            "(.*.||)(guanjia.qq.com|qqpcmgr|QQPCMGR)",
+            "(.*.||)(rising|kingsoft|duba|xindubawukong|jinshanduba).(com|net|org)",
+            "(.*.||)(netvigator|torproject).(com|cn|net|org)",
+            "(..||)(visa|mycard|gash|beanfun|bank).",
+            "(.*.||)(gov|12377|12315|talk.news.pts.org|creaders|zhuichaguoji|efcc.org|cyberpolice|aboluowang|tuidang|epochtimes|zhengjian|110.qq|mingjingnews|inmediahk|xinsheng|breakgfw|chengmingmag|jinpianwang|qi-gong|mhradio|edoors|renminbao|soundofhope|xizang-zhiye|bannedbook|ntdtv|12321|secretchina|dajiyuan|boxun|chinadigitaltimes|dwnews|huaglad|oneplusnews|epochweekly|cn.rfi).(cn|com|org|net|club|net|fr|tw|hk|eu|info|me)",
+            "(.*.||)(miaozhen|cnzz|talkingdata|umeng).(cn|com)",
+            "(.*.||)(mycard).(com|tw)",
+            "(.*.||)(gash).(com|tw)",
+            "(.bank.)",
+            "(.*.||)(pincong).(rocks)",
+            "(.*.||)(taobao).(com)",
+            "(.*.||)(laomoe|jiyou|ssss|lolicp|vv1234|0z|4321q|868123|ksweb|mm126).(com|cloud|fun|cn|gs|xyz|cc)",
+            "(flows|miaoko).(pages).(dev)"
+        ],
+        "outbound": "block"
+      },
+      {
         "outbound": "direct",
-        "network": ["udp", "tcp"]
+        "network": [
+          "udp","tcp"
+        ]
       }
     ],
     "auto_detect_interface": false
+  },
+  "experimental": {
+    "cache_file": {
+      "enabled": true
+    }
   }
 }
 EOF
@@ -1302,7 +1273,7 @@ print_instructions() {
    3. DNS rules in JSON route query to unlock server (not 1.1.1.1)
    4. Unlock server returns its own IP: HK_IP
    5. Landing node connects to HK_IP (thinks it's Netflix)
-   6. Route rules match netflix.com domain → direct outbound to unlock IP
+   6. Route rules match netflix.com domain → use unlock outbound
    7. SNI proxy on unlock server forwards to real Netflix
    8. Netflix sees Hong Kong IP ✓
 
@@ -1416,7 +1387,7 @@ EOF
    3. JSON 中的 DNS 规则将查询路由到解锁机 (不是 1.1.1.1)
    4. 解锁机返回自己的 IP: HK_IP
    5. 落地节点连接到 HK_IP (以为是 Netflix)
-   6. 路由规则匹配 netflix.com 域名 → 通过 direct 出站直连解锁机 IP
+   6. 路由规则匹配 netflix.com 域名 → 使用 unlock 出站
    7. 解锁机上的 SNI 代理转发到真实的 Netflix
    8. Netflix 看到香港 IP ✓
 
