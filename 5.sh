@@ -1,10 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V5.1 修复增强版)
-#   基于原版逻辑重构：
-#   1. 菜单式交互 (UI)
-#   2. 修复 Docker 端口不监听问题 (内嵌构建文件)
-#   3. 配置持久化保存
+#   V2bX 专用解锁服务总控脚本 (V21.0 白名单增强版)
+#   
+#   更新日志：
+#   1. [新增] 白名单增删改查菜单 (不再是覆盖式)
+#   2. [优化] 自动去重 IP，防止重复添加
+#   3. [保持] V20 的所有核心功能 (端口猎杀、状态实测)
 # ==========================================================
 
 RED='\033[0;31m'
@@ -12,29 +13,37 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 SKY='\033[0;36m'
 NC='\033[0m'
+
 WORK_DIR="/root/dns_unlock"
 CONFIG_FILE="$WORK_DIR/install.env"
+WHITELIST_FILE="$WORK_DIR/whitelist.txt"
 
-# 加载保存的配置
-if [ -f "$CONFIG_FILE" ]; then
-    source "$CONFIG_FILE"
-fi
+# 确保目录和文件存在
+mkdir -p "$WORK_DIR"
+touch "$WHITELIST_FILE"
+
+if [ -f "$CONFIG_FILE" ]; then source "$CONFIG_FILE"; fi
 
 # ==========================================================
 # 基础工具
 # ==========================================================
 
-spinner() {
-    local pid=$1
-    local msg=$2
-    local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    local i=0
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) %10 ))
-        printf "\r%s%s %s%s" "${YELLOW}" "${spin:$i:1}" "${msg}" "${NC}"
-        sleep 0.1
-    done
-    printf "\r\033[K"
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}错误: 必须使用 root 权限运行此脚本${NC}"
+        exit 1
+    fi
+}
+
+install_base_tools() {
+    if ! command -v netstat &> /dev/null || ! command -v dig &> /dev/null || ! command -v lsof &> /dev/null; then
+        echo -e "${YELLOW}>>> 补全基础工具...${NC}"
+        if [ -f /etc/debian_version ]; then
+            apt-get update -y && apt-get install -y net-tools dnsutils lsof procps
+        elif [ -f /etc/redhat-release ]; then
+            yum install -y net-tools bind-utils lsof
+        fi
+    fi
 }
 
 validate_ip() {
@@ -45,66 +54,242 @@ validate_ip() {
 }
 
 save_config() {
-    mkdir -p "$WORK_DIR"
     echo "FINAL_IP=\"$FINAL_IP\"" > "$CONFIG_FILE"
     echo "DEPLOY_MODE=\"$DEPLOY_MODE\"" >> "$CONFIG_FILE"
     echo "FINAL_JSON_LIST='$FINAL_JSON_LIST'" >> "$CONFIG_FILE"
+    echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# ==========================================================
-# 核心安装逻辑 (修复 Docker 监听问题)
-# ==========================================================
-
-install_check() {
-    # 检查 Root
-    if [ "$(id -u)" != "0" ]; then
-        echo -e "${RED}错误: 必须使用 root 权限运行此脚本${NC}"
-        exit 1
+# 暴力释放端口
+kill_port_process() {
+    local port=$1
+    pids=$(lsof -t -i:$port 2>/dev/null || netstat -nlp | grep ":$port " | awk '{print $7}' | cut -d'/' -f1)
+    if [ -n "$pids" ]; then
+        for pid in $pids; do kill -9 $pid 2>/dev/null; done
     fi
+}
 
-    # 检查端口
-    local ports=(53 80 443)
-    local has_err=0
-    for port in "${ports[@]}"; do
-        if ss -tuln | grep -q ":${port} "; then
-            echo -e "${RED}✗ 端口 $port 已被占用${NC}"
-            has_err=1
-        fi
+force_cleanup() {
+    echo -e "${YELLOW}>>> 清理环境...${NC}"
+    if command -v docker &> /dev/null; then
+        docker rm -f dns_unlock sniproxy_unlock 2>/dev/null
+        cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
+    fi
+    services=("nginx" "apache2" "caddy" "systemd-resolved" "dnsmasq" "sniproxy")
+    for svc in "${services[@]}"; do
+        systemctl stop "$svc" 2>/dev/null
+        systemctl disable "$svc" 2>/dev/null
     done
-    if [ $has_err -eq 1 ]; then
-        echo -e "${YELLOW}提示: 如果是旧的解锁服务占用，安装过程中会自动尝试停止。${NC}"
-        read -p "是否继续? [y/N]: " cont
-        if [[ ! "$cont" =~ ^[Yy]$ ]]; then return 1; fi
-    fi
+    kill_port_process 53
+    kill_port_process 80
+    kill_port_process 443
+    rm -f /etc/resolv.conf
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
 }
 
-select_ip_logic() {
-    echo -e "${SKY}正在检测本机 IP...${NC}"
-    IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
-    IPV6=$(curl -6s --max-time 3 api.ip.sb/ip || curl -6s --max-time 3 ifconfig.co)
+# ==========================================================
+# 防火墙核心逻辑 (V21.0 增强)
+# ==========================================================
 
-    echo -e "1. IPv4: ${GREEN}${IPV4:-未检测到}${NC}"
-    echo -e "2. IPv6: ${GREEN}${IPV6:-未检测到}${NC}"
-    echo "3. 手动输入"
+apply_firewall() {
+    echo -e "${YELLOW}>>> 正在刷新防火墙规则...${NC}"
+    local ips
+    ips=$(cat "$WHITELIST_FILE")
     
-    read -p "请选择解锁服务使用的 IP [1-3]: " IP_CHOICE
-    case $IP_CHOICE in
-        2) FINAL_IP="$IPV6" ;;
-        3) read -p "输入 IP: " FINAL_IP ;;
-        *) FINAL_IP="$IPV4" ;;
-    esac
-    
-    if [ -z "$FINAL_IP" ]; then
-        echo -e "${RED}错误：无效的 IP${NC}"
-        return 1
+    # 1. UFW 逻辑
+    if command -v ufw &> /dev/null; then
+        ufw allow ssh >/dev/null
+        ufw allow 22/tcp >/dev/null
+        
+        # 清理旧规则
+        ufw delete allow 53/tcp >/dev/null 2>&1
+        ufw delete allow 53/udp >/dev/null 2>&1
+        ufw delete allow 80/tcp >/dev/null 2>&1
+        ufw delete allow 443/tcp >/dev/null 2>&1
+        
+        # 应用新规则
+        for ip in $ips; do
+            ufw allow from "$ip" to any port 53 >/dev/null
+            ufw allow from "$ip" to any port 80 >/dev/null
+            ufw allow from "$ip" to any port 443 >/dev/null
+        done
+        
+        echo "y" | ufw enable >/dev/null
+        ufw reload >/dev/null
+        
+    # 2. Iptables 逻辑
+    else
+        # 确保专用链存在
+        iptables -N UNLOCK_FW 2>/dev/null
+        iptables -F UNLOCK_FW 
+        iptables -D INPUT -j UNLOCK_FW 2>/dev/null
+        iptables -I INPUT -j UNLOCK_FW
+        
+        # 放行白名单
+        for ip in $ips; do
+            iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 53 -j ACCEPT
+            iptables -A UNLOCK_FW -s "$ip" -p udp --dport 53 -j ACCEPT
+            iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 80 -j ACCEPT
+            iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 443 -j ACCEPT
+        done
+        
+        # 放行回环
+        iptables -A UNLOCK_FW -s 127.0.0.1 -j ACCEPT
+        
+        # 拒绝其他
+        iptables -A UNLOCK_FW -p tcp --dport 53 -j DROP
+        iptables -A UNLOCK_FW -p udp --dport 53 -j DROP
+        iptables -A UNLOCK_FW -p tcp --dport 80 -j DROP
+        iptables -A UNLOCK_FW -p tcp --dport 443 -j DROP
+        
+        iptables -A UNLOCK_FW -j RETURN
     fi
+    echo -e "${GREEN}防火墙规则已生效！当前允许 $(wc -l < "$WHITELIST_FILE") 个 IP。${NC}"
+}
+
+# 🆕 白名单管理菜单
+manage_whitelist() {
+    while true; do
+        clear
+        echo -e "${SKY}>>> 白名单管理${NC}"
+        echo -e "当前规则: 默认拒绝所有，仅允许以下 IP"
+        echo -e "----------------------------------------"
+        if [ -s "$WHITELIST_FILE" ]; then
+            cat -n "$WHITELIST_FILE" | sed "s/^/  ${GREEN}/;s/$/${NC}/"
+        else
+            echo -e "  ${RED}(空) - 当前任何人无法连接，请添加 IP！${NC}"
+        fi
+        echo -e "----------------------------------------"
+        echo -e "${YELLOW}1) 添加 IP (支持多个)${NC}"
+        echo -e "${YELLOW}2) 删除 IP${NC}"
+        echo -e "${YELLOW}3) 清空所有 IP${NC}"
+        echo -e "${BLUE}4) 立即应用规则并返回${NC}"
+        echo -e "${RED}0) 返回主菜单${NC}"
+        echo ""
+        read -p ">> " wl_choice
+        
+        case "$wl_choice" in
+            1)
+                echo -e "请输入 IP (多个 IP 用空格或逗号分隔):"
+                read -p ">> " new_ips
+                # 替换逗号为空格
+                new_ips=${new_ips//,/ }
+                for ip in $new_ips; do
+                    if validate_ip "$ip"; then
+                        if ! grep -q "^$ip$" "$WHITELIST_FILE"; then
+                            echo "$ip" >> "$WHITELIST_FILE"
+                            echo -e "添加: ${GREEN}$ip${NC}"
+                        else
+                            echo -e "跳过: $ip (已存在)"
+                        fi
+                    else
+                        echo -e "${RED}无效 IP: $ip${NC}"
+                    fi
+                done
+                # 去重
+                sort -u "$WHITELIST_FILE" -o "$WHITELIST_FILE"
+                read -p "按回车继续..."
+                ;;
+            2)
+                read -p "请输入要删除的 IP: " del_ip
+                if [ -n "$del_ip" ]; then
+                    sed -i "/^$del_ip$/d" "$WHITELIST_FILE"
+                    echo -e "${GREEN}已删除 $del_ip${NC}"
+                fi
+                read -p "按回车继续..."
+                ;;
+            3)
+                read -p "确定清空所有白名单吗？(y/n): " confirm
+                if [[ "$confirm" == "y" ]]; then
+                    > "$WHITELIST_FILE"
+                    echo -e "${GREEN}已清空${NC}"
+                fi
+                ;;
+            4)
+                apply_firewall
+                read -p "按回车返回..." _
+                return
+                ;;
+            0)
+                return
+                ;;
+            *) ;;
+        esac
+    done
+}
+
+# ==========================================================
+# 核心逻辑 (保持不变)
+# ==========================================================
+
+define_rules() {
+    CONF_GPT="address=/openai.com/$FINAL_IP
+address=/chatgpt.com/$FINAL_IP
+address=/oaistatic.com/$FINAL_IP
+address=/oaiusercontent.com/$FINAL_IP
+address=/ai.com/$FINAL_IP"
+    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"'
+
+    CONF_GEMINI="address=/gemini.google.com/$FINAL_IP
+address=/bard.google.com/$FINAL_IP
+address=/ai.google.dev/$FINAL_IP
+address=/generativelanguage.googleapis.com/$FINAL_IP
+address=/makersuite.google.com/$FINAL_IP
+address=/deepmind.com/$FINAL_IP
+address=/deepmind.google/$FINAL_IP"
+    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google"'
+
+    CONF_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
+address=/copilot.cloud.microsoft/$FINAL_IP
+address=/bing.com/$FINAL_IP
+address=/bingapis.com/$FINAL_IP"
+    JSON_COPILOT='"copilot.microsoft.com", "copilot.cloud.microsoft", "bing.com", "bingapis.com"'
+
+    CONF_CLAUDE="address=/anthropic.com/$FINAL_IP
+address=/claude.ai/$FINAL_IP"
+    JSON_CLAUDE='"anthropic.com", "claude.ai"'
+
+    CONF_NETFLIX="address=/netflix.com/$FINAL_IP
+address=/netflix.net/$FINAL_IP
+address=/nflxvideo.net/$FINAL_IP
+address=/nflximg.net/$FINAL_IP
+address=/nflxext.com/$FINAL_IP"
+    JSON_NETFLIX='"netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflxext.com"'
+
+    CONF_DISNEY="address=/disney.com/$FINAL_IP
+address=/disneyplus.com/$FINAL_IP
+address=/dssott.com/$FINAL_IP
+address=/bamgrid.com/$FINAL_IP"
+    JSON_DISNEY='"disney.com", "disneyplus.com", "dssott.com", "bamgrid.com"'
+
+    CONF_TIKTOK="address=/tiktok.com/$FINAL_IP
+address=/tiktokv.com/$FINAL_IP
+address=/tiktokcdn.com/$FINAL_IP
+address=/musical.ly/$FINAL_IP"
+    JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "musical.ly"'
+
+    CONF_YOUTUBE="address=/youtube.com/$FINAL_IP
+address=/googlevideo.com/$FINAL_IP
+address=/ytimg.com/$FINAL_IP
+address=/ggpht.com/$FINAL_IP"
+    JSON_YOUTUBE='"youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com"'
+
+    CONF_SPOTIFY="address=/spotify.com/$FINAL_IP
+address=/scdn.co/$FINAL_IP
+address=/spotifycdn.com/$FINAL_IP"
+    JSON_SPOTIFY='"spotify.com", "scdn.co", "spotifycdn.com"'
+
+    CONF_HBO="address=/hbomax.com/$FINAL_IP
+address=/max.com/$FINAL_IP
+address=/hbo.com/$FINAL_IP"
+    JSON_HBO='"hbomax.com", "max.com", "hbo.com"'
 }
 
 select_services_logic() {
-    # 原版服务选择逻辑
-    echo -e "\n${SKY}选择需要解锁的服务 (可多选，逗号分隔)${NC}"
+    define_rules
+    echo -e "\n${SKY}可用服务 (输入数字，用逗号分隔，例如 1,3,5):${NC}"
     echo "1. ChatGPT (OpenAI)"
-    echo "2. Gemini (Google)"
+    echo "2. Gemini (Google AI)"
     echo "3. Copilot (Microsoft)"
     echo "4. Claude (Anthropic)"
     echo "5. Netflix"
@@ -113,106 +298,127 @@ select_services_logic() {
     echo "8. YouTube"
     echo "9. Spotify"
     echo "10. HBO Max"
-    echo "a. 全选 (1-10)"
-    read -p "输入: " SERVICE_CHOICE
+    echo "a. 全选"
+    read -p "选择: " SERVICE_CHOICE
 
-    if [[ "$SERVICE_CHOICE" == "a" || "$SERVICE_CHOICE" == "A" ]]; then
-        SERVICE_CHOICE="1,2,3,4,5,6,7,8,9,10"
-    fi
+    case "$SERVICE_CHOICE" in
+        a|A) SERVICE_CHOICE="1,2,3,4,5,6,7,8,9,10" ;;
+    esac
 
     mkdir -p "$WORK_DIR"
-    echo "# Generated Config" > "$WORK_DIR/dnsmasq.conf"
+    echo "# Config Generated by Script" > "$WORK_DIR/dnsmasq.conf"
+    
     FINAL_JSON_LIST=""
+    TYPE_NAME=""
+    local selected_count=0
     
     IFS=',' read -ra SERVICES <<< "$SERVICE_CHOICE"
     for service in "${SERVICES[@]}"; do
-        local d_list=""
-        local json_item=""
+        service=$(echo "$service" | tr -d '[:space:]')
         case $service in
-            1) d_list="openai.com chatgpt.com oaistatic.com oaiusercontent.com ai.com"; json_item='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"';;
-            2) d_list="gemini.google.com bard.google.com ai.google.dev deepmind.com"; json_item='"gemini.google.com", "bard.google.com"';;
-            3) d_list="copilot.microsoft.com bing.com"; json_item='"copilot.microsoft.com", "bing.com"';;
-            4) d_list="anthropic.com claude.ai"; json_item='"anthropic.com", "claude.ai"';;
-            5) d_list="netflix.com netflix.net nflxvideo.net nflximg.net nflxext.com"; json_item='"netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net"';;
-            6) d_list="disney.com disneyplus.com dssott.com bamgrid.com"; json_item='"disney.com", "disneyplus.com"';;
-            7) d_list="tiktok.com tiktokv.com tiktokcdn.com musical.ly"; json_item='"tiktok.com", "tiktokv.com"';;
-            8) d_list="youtube.com googlevideo.com ytimg.com ggpht.com"; json_item='"youtube.com", "googlevideo.com"';;
-            9) d_list="spotify.com scdn.co"; json_item='"spotify.com"';;
-            10) d_list="hbomax.com max.com hbo.com"; json_item='"hbomax.com", "max.com"';;
+            1) echo "$CONF_GPT" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_GPT"; NAME="ChatGPT";;
+            2) echo "$CONF_GEMINI" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_GEMINI"; NAME="Gemini";;
+            3) echo "$CONF_COPILOT" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_COPILOT"; NAME="Copilot";;
+            4) echo "$CONF_CLAUDE" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_CLAUDE"; NAME="Claude";;
+            5) echo "$CONF_NETFLIX" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_NETFLIX"; NAME="Netflix";;
+            6) echo "$CONF_DISNEY" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_DISNEY"; NAME="Disney+";;
+            7) echo "$CONF_TIKTOK" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_TIKTOK"; NAME="TikTok";;
+            8) echo "$CONF_YOUTUBE" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_YOUTUBE"; NAME="YouTube";;
+            9) echo "$CONF_SPOTIFY" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_SPOTIFY"; NAME="Spotify";;
+            10) echo "$CONF_HBO" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_HBO"; NAME="HBO";;
+            *) continue ;;
         esac
         
-        for d in $d_list; do
-            echo "address=/$d/$FINAL_IP" >> "$WORK_DIR/dnsmasq.conf"
-        done
-        
-        if [ -n "$json_item" ]; then
-            if [ -n "$FINAL_JSON_LIST" ]; then FINAL_JSON_LIST="$FINAL_JSON_LIST, "; fi
-            FINAL_JSON_LIST="${FINAL_JSON_LIST}${json_item}"
-        fi
+        [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+        FINAL_JSON_LIST="${FINAL_JSON_LIST}${ITEM}"
+        [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+        TYPE_NAME="${TYPE_NAME}${NAME}"
+        ((selected_count++))
     done
+
+    if [ $selected_count -eq 0 ]; then
+        echo -e "${YELLOW}未选择有效服务，默认选择 ChatGPT${NC}"
+        echo "$CONF_GPT" >> "$WORK_DIR/dnsmasq.conf"
+        FINAL_JSON_LIST="$JSON_GPT"
+        TYPE_NAME="ChatGPT"
+    fi
+    
+    if [ $selected_count -ge 5 ]; then
+        TYPE_NAME="自定义 ($selected_count 个服务)"
+    fi
 }
 
+# ==========================================================
+# 安装流程
+# ==========================================================
+
 run_install() {
-    install_check || return
-    select_ip_logic || return
+    check_root
+    install_base_tools
+    force_cleanup
     
-    echo -e "\n${SKY}选择部署模式${NC}"
-    echo "1. Docker 模式 (推荐)"
-    echo "2. 原生模式 (低资源)"
-    read -p "选择 [1-2]: " mode_input
-    if [ "$mode_input" == "2" ]; then DEPLOY_MODE="native"; else DEPLOY_MODE="docker"; fi
-    
+    IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
+    echo -e "\n${SKY}检测本机 IP: ${GREEN}${IPV4:-未知}${NC}"
+    read -p "确认使用此 IP? (y/n): " ip_conf
+    if [[ "$ip_conf" == "n" ]]; then read -p "输入IP: " FINAL_IP; else FINAL_IP=$IPV4; fi
+    if [ -z "$FINAL_IP" ]; then echo -e "${RED}IP 无效${NC}"; return; fi
+
+    echo -e "\n${SKY}部署模式:${NC}"
+    echo "1. Docker 模式 (Debian构建)"
+    echo "2. 原生模式 (推荐)"
+    read -p "选择 [1-2]: " MODE_OPT
+    if [ "$MODE_OPT" == "2" ]; then DEPLOY_MODE="native"; else DEPLOY_MODE="docker"; fi
+
     select_services_logic
 
-    # === 原生模式部署 ===
+    # === 原生模式 ===
     if [ "$DEPLOY_MODE" == "native" ]; then
-        echo -e "${YELLOW}正在安装原生依赖...${NC}"
+        echo -e "${YELLOW}>>> 安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
-        systemctl stop dnsmasq sniproxy 2>/dev/null
+        systemctl stop systemd-resolved 2>/dev/null
+        systemctl disable systemd-resolved 2>/dev/null
         
-        # 配置 Dnsmasq
         cat > /etc/dnsmasq.conf <<EOF
 port=53
 no-resolv
 server=8.8.8.8
 conf-dir=/etc/dnsmasq.d/,*.conf
 cache-size=1000
+listen-address=::,0.0.0.0
+bind-interfaces
 EOF
         mkdir -p /etc/dnsmasq.d
         cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
-        
-        # 配置 Sniproxy
         mkdir -p /var/log/sniproxy
+        chown daemon:daemon /var/log/sniproxy
         cat > /etc/sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
+resolver { nameserver 8.8.8.8; mode ipv4_only; }
 error_log { filename /var/log/sniproxy/error.log; priority notice; }
 access_log { filename /var/log/sniproxy/access.log; }
 listen 80 { proto http; table http_hosts; }
 listen 443 { proto tls; table https_hosts; }
-table http_hosts { .* *:80; }
-table https_hosts { .* *:443; }
+table http_hosts { .* *; }
+table https_hosts { .* *; }
 EOF
         systemctl restart dnsmasq sniproxy
         systemctl enable dnsmasq sniproxy
         
-    # === Docker 模式部署 (修复 BUG 版) ===
+    # === Docker 模式 ===
     else
-        echo -e "${YELLOW}正在安装 Docker...${NC}"
+        echo -e "${YELLOW}>>> 配置 Docker 环境...${NC}"
         if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | bash; fi
-        
         cd "$WORK_DIR"
         
-        # 【BUG修复】直接生成 Dockerfile，不依赖下载
+        # 写入配置文件 (复用之前的逻辑)
         cat > Dockerfile <<EOF
-FROM alpine:latest
-RUN apk add --no-cache dnsmasq sniproxy
-# 启动脚本：确保进程前台运行
+FROM debian:bullseye-slim
+RUN apt-get update && apt-get install -y dnsmasq sniproxy procps && apt-get clean
 RUN echo '#!/bin/sh' > /entrypoint.sh && \\
     echo 'dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf &' >> /entrypoint.sh && \\
     echo 'sniproxy -c /etc/sniproxy.conf -f' >> /entrypoint.sh && \\
     chmod +x /entrypoint.sh
-# 默认配置
 RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'no-resolv' >> /etc/dnsmasq.conf && \\
     echo 'server=8.8.8.8' >> /etc/dnsmasq.conf && \\
@@ -220,11 +426,10 @@ RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'cache-size=1000' >> /etc/dnsmasq.conf
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
-
-        # 生成 Sniproxy 配置
         cat > sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
+resolver { nameserver 8.8.8.8; mode ipv4_only; }
 error_log { filename /dev/stderr; priority notice; }
 access_log { filename /dev/stdout; }
 listen 80 { proto http; table http_hosts; }
@@ -232,8 +437,6 @@ listen 443 { proto tls; table https_hosts; }
 table http_hosts { .* *; }
 table https_hosts { .* *; }
 EOF
-
-        # 生成 Compose (Host 模式)
         cat > docker-compose.yml <<EOF
 services:
   unlock:
@@ -243,66 +446,136 @@ services:
     network_mode: host
     privileged: true
     volumes:
-      - ./dnsmasq.conf:/etc/dnsmasq.d/unlock.conf
+      - ./dnsmasq.conf:/etc/dnsmasq.d/custom_unlock.conf
       - ./sniproxy.conf:/etc/sniproxy.conf
 EOF
-        
-        echo -e "${YELLOW}正在构建并启动容器...${NC}"
-        docker compose down 2>/dev/null
-        docker compose up -d --build
+        docker compose up -d --build --remove-orphans
     fi
 
     save_config
-    echo -e "${GREEN}安装完成！${NC}"
-    read -p "按回车返回菜单..." _
+    echo -e "${GREEN}安装完成!${NC}"
+    check_status
 }
 
-# ==========================================================
-# 菜单功能函数
-# ==========================================================
+modify_services() {
+    if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
+    echo -e "${SKY}>>> 修改解锁规则 (无需重装)${NC}"
+    select_services_logic
+    if [ "$DEPLOY_MODE" == "native" ]; then
+        cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
+        systemctl restart dnsmasq
+        echo -e "${GREEN}Native 服务已更新规则并重启${NC}"
+    else
+        cd "$WORK_DIR"
+        docker compose restart
+        echo -e "${GREEN}Docker 容器已重启并加载新规则${NC}"
+    fi
+    save_config
+    echo -e "${YELLOW}提示: 请重新生成并复制 JSON 到 V2bX 面板${NC}"
+    read -p "是否立即查看新 JSON? (y/n): " view_json
+    if [[ "$view_json" == "y" ]]; then gen_json; fi
+}
 
-# 设置白名单
-fw_settings() {
-    echo -e "${SKY}输入允许连接的落地机 IP (多个用空格分隔)${NC}"
-    read -p "IP: " ips
-    
-    if [ -n "$ips" ]; then
-        if command -v ufw &> /dev/null; then
-            ufw allow 22/tcp >/dev/null 2>&1 # 防自锁
-            echo "y" | ufw enable >/dev/null 2>&1
-            for ip in $ips; do ufw allow from "$ip" to any; done
-            ufw reload
+restart_services() {
+    echo -e "${SKY}>>> 正在重启服务...${NC}"
+    if [ "$DEPLOY_MODE" == "native" ]; then
+        systemctl restart dnsmasq sniproxy
+        if systemctl is-active dnsmasq >/dev/null; then
+            echo -e "${GREEN}Native 服务重启成功${NC}"
         else
-            # iptables
-            iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-            for ip in $ips; do
-                iptables -I INPUT -s "$ip" -p tcp --dport 53 -j ACCEPT
-                iptables -I INPUT -s "$ip" -p udp --dport 53 -j ACCEPT
-                iptables -I INPUT -s "$ip" -p tcp --dport 80 -j ACCEPT
-                iptables -I INPUT -s "$ip" -p tcp --dport 443 -j ACCEPT
-            done
-            # 拒绝其他
-            iptables -A INPUT -p tcp --dport 53 -j DROP
-            iptables -A INPUT -p udp --dport 53 -j DROP
-            iptables -A INPUT -p tcp --dport 80 -j DROP
-            iptables -A INPUT -p tcp --dport 443 -j DROP
+            echo -e "${RED}Native 服务启动失败，请检查日志${NC}"
         fi
-        echo -e "${GREEN}防火墙规则已更新${NC}"
+    elif [ "$DEPLOY_MODE" == "docker" ]; then
+        cd "$WORK_DIR"
+        docker compose restart
+        echo -e "${GREEN}Docker 容器已重启${NC}"
+    else
+        echo -e "${RED}未检测到安装模式${NC}"
     fi
     read -p "按回车返回..." _
 }
 
-# 生成 JSON (带审计)
-gen_json() {
-    if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装服务!${NC}"; read -p "" _; return; fi
+monitor_traffic() {
+    if [ -z "$DEPLOY_MODE" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
+    clear
+    echo -e "${SKY}>>> 实时流量监控 (Ctrl+C 退出)${NC}"
+    echo -e "${YELLOW}显示格式: [来源IP] -> [目标域名]${NC}"
+    echo -e "------------------------------------------------"
     
-    # 构造 CIDR
-    if [[ "$FINAL_IP" == *":"* ]]; then CIDR="${FINAL_IP}/128"; else CIDR="${FINAL_IP}/32"; fi
+    if [ "$DEPLOY_MODE" == "docker" ]; then
+        docker logs -f dns_unlock
+    else
+        if [ -f /var/log/sniproxy/access.log ]; then
+            tail -f /var/log/sniproxy/access.log
+        else
+            echo -e "${RED}找不到日志文件: /var/log/sniproxy/access.log${NC}"
+            read -p "按回车返回..." _
+        fi
+    fi
+}
+
+check_status() {
+    install_base_tools
+    clear
+    echo -e "${SKY}>>> 系统状态检查 (实测模式)${NC}"
+    echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
+    
+    check_port_active() {
+        local port=$1
+        local proto=$2
+        if ss -"$proto"nlp | grep -q ":$port " || netstat -"$proto"nlp | grep -q ":$port "; then
+             echo -e "端口 $port ($proto): ${GREEN}正常 (监听中)${NC}"
+        else
+             echo -e "端口 $port ($proto): ${RED}异常 (未监听)${NC}"
+        fi
+    }
+
+    echo -e "\n端口状态:"
+    check_port_active 53 u
+    check_port_active 80 t
+    check_port_active 443 t
+    
+    echo -e "\n功能实测:"
+    if [ -n "$FINAL_IP" ]; then
+        echo -n "DNS 劫持测试 (OpenAI): "
+        TEST_DNS=$(dig +short @127.0.0.1 openai.com 2>/dev/null)
+        if [ "$TEST_DNS" == "$FINAL_IP" ]; then
+            echo -e "${GREEN}成功 (解析结果: $TEST_DNS)${NC}"
+        else
+            echo -e "${RED}失败 (解析结果: ${TEST_DNS:-无})${NC}"
+        fi
+        
+        echo -n "Sniproxy 转发测试 (HTTP): "
+        TEST_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: whatismyip.akamai.com" http://127.0.0.1)
+        if [[ "$TEST_HTTP" =~ ^(200|301|302|400|403|404)$ ]]; then
+             echo -e "${GREEN}服务存活 (Code: $TEST_HTTP)${NC}"
+        else
+             echo -e "${RED}连接失败 (Code: ${TEST_HTTP:-超时})${NC}"
+        fi
+    fi
+    read -p "按回车返回..." _
+}
+
+uninstall_all() {
+    echo -e "${RED}正在卸载...${NC}"
+    if command -v docker &> /dev/null; then docker rm -f dns_unlock sniproxy_unlock 2>/dev/null; fi
+    systemctl stop dnsmasq sniproxy 2>/dev/null
+    rm -rf "$WORK_DIR"
+    echo -e "${GREEN}卸载完成${NC}"
+    read -p "按回车返回..." _
+}
+
+gen_json() {
+    if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
+    if [[ "$FINAL_IP" == *":"* ]]; then IP_CIDR="${FINAL_IP}/128"; else IP_CIDR="${FINAL_IP}/32"; fi
 
     clear
-    echo -e "${SKY}>>> V2bX / Sing-box 节点配置 (含审计规则)${NC}"
-    echo -e "${YELLOW}注意：address 指向本机 IP: ${FINAL_IP}${NC}\n"
-    
+    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+    echo -e "${GREEN}   🎉 V2bX / NodePass 专用配置 (含审计)   ${NC}"
+    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
+    echo -e "解锁 IP: ${YELLOW}$FINAL_IP${NC}"
+    echo -e "规则列表: ${SKY}${TYPE_NAME}${NC}\n"
+
     cat <<EOF
 {
   "dns": {
@@ -336,20 +609,20 @@ gen_json() {
   "route": {
     "rules": [
       { "protocol": "dns", "outbound": "direct" },
-      { "ip_cidr": ["${CIDR}"], "outbound": "direct" },
+      { "ip_cidr": ["${IP_CIDR}"], "outbound": "direct" },
       { "domain_suffix": [${FINAL_JSON_LIST}], "outbound": "direct" },
       { "ip_is_private": true, "outbound": "block" },
       { "protocol": "quic", "outbound": "block" },
       {
         "domain_regex": [
-          "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
-          "(.+.|^)(360|so).(cn|com)",
-          "(Subject|HELO|SMTP)",
-          "(torrent|.torrent|peer_id=|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=)",
-          "(^.@)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168).(info|biz|com|de|net|org|me|la)",
-          "(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
-          "(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
-          "(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)"
+            "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
+            "(.+.|^)(360|so).(cn|com)",
+            "(Subject|HELO|SMTP)",
+            "(torrent|.torrent|peer_id=|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=)",
+            "(^.@)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168).(info|biz|com|de|net|org|me|la)",
+            "(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
+            "(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
+            "(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)"
         ],
         "outbound": "block"
       },
@@ -363,90 +636,40 @@ EOF
     read -p "按回车返回菜单..." _
 }
 
-# 状态检查
-check_status() {
-    clear
-    echo -e "${SKY}>>> 系统状态检查${NC}"
-    echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
-    echo -e "模式: ${YELLOW}${DEPLOY_MODE:-未知}${NC}"
-    
-    echo -e "\n端口监听状态:"
-    for p in 53 80 443; do
-        if ss -tuln | grep -q ":$p "; then
-            echo -e "端口 $p: ${GREEN}正常 (监听中)${NC}"
-        else
-            echo -e "端口 $p: ${RED}异常 (未监听)${NC}"
-        fi
-    done
-    
-    echo -e "\n服务状态:"
-    if [ "$DEPLOY_MODE" == "docker" ]; then
-        if docker ps | grep -q "dns_unlock"; then echo -e "Docker: ${GREEN}运行中${NC}"; else echo -e "Docker: ${RED}停止${NC}"; fi
-    else
-        systemctl is-active dnsmasq >/dev/null && echo -e "Dnsmasq: ${GREEN}运行中${NC}"
-        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}"
-    fi
-    
-    read -p "按回车返回..." _
-}
-
-# 连通性测试
-test_connect() {
-    if [ -z "$FINAL_IP" ]; then echo -e "请先安装"; read -p "" _; return; fi
-    clear
-    echo -e "${SKY}>>> 连通性测试 (自测)${NC}"
-    echo "1. 本地 Ping"
-    ping -c 3 $FINAL_IP
-    echo ""
-    echo "2. 本地 443 连接测试"
-    curl -I -k https://$FINAL_IP
-    echo ""
-    read -p "按回车返回..." _
-}
-
-uninstall_all() {
-    echo -e "${RED}正在卸载...${NC}"
-    if command -v docker &> /dev/null; then docker rm -f dns_unlock 2>/dev/null; fi
-    systemctl stop dnsmasq sniproxy 2>/dev/null
-    rm -rf "$WORK_DIR"
-    echo -e "${GREEN}卸载完成，防火墙建议手动清理。${NC}"
-    read -p "按回车返回..." _
-}
-
 # ==========================================================
 # 主菜单
 # ==========================================================
 
-main_menu() {
-    while true; do
-        clear
-        echo -e "${SKY}==================================================${NC}"
-        echo -e "${SKY}  V2bX 专用解锁服务总控 (V5.1 修复版)${NC}"
-        echo -e "${SKY}==================================================${NC}\n"
-        echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
-        echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
+while true; do
+    clear
+    echo -e "${SKY}==================================================${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V21.0 白名单增强版)${NC}"
+    echo -e "${SKY}==================================================${NC}\n"
+    echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
+    echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
 
-        echo -e "${YELLOW}1) 安装 / 重装解锁服务 (Docker/原生)${NC}"
-        echo -e "${YELLOW}2) 设置白名单 IP (防火墙)${NC}"
-        echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置${NC}"
-        echo -e "${YELLOW}4) 查看运行状态${NC}"
-        echo -e "${YELLOW}5) 测试连通性${NC}"
-        echo -e "${RED}6) 卸载服务${NC}"
-        echo -e "${RED}0) 退出${NC}"
-        echo ""
-        read -p ">> " choice
+    echo -e "${YELLOW}1) 安装 / 重装解锁服务${NC}"
+    echo -e "${YELLOW}2) 管理白名单 (允许连接的 IP)${NC}"
+    echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置${NC}"
+    echo -e "${YELLOW}4) 查看运行状态${NC}"
+    echo -e "${BLUE}5) 实时流量监控${NC}"
+    echo -e "${BLUE}6) 修改解锁规则 (热更新)${NC}"
+    echo -e "${BLUE}7) 重启服务${NC}"
+    echo -e "${RED}8) 卸载服务${NC}"
+    echo -e "${RED}0) 退出${NC}"
+    echo ""
+    read -p ">> " choice
 
-        case "$choice" in
-            1) run_install ;;
-            2) fw_settings ;;
-            3) gen_json ;;
-            4) check_status ;;
-            5) test_connect ;;
-            6) uninstall_all ;;
-            0) exit 0 ;;
-            *) ;;
-        esac
-    done
-}
-
-main_menu
+    case "$choice" in
+        1) run_install ;;
+        2) manage_whitelist ;;
+        3) gen_json ;;
+        4) check_status ;;
+        5) monitor_traffic ;;
+        6) modify_services ;;
+        7) restart_services ;;
+        8) uninstall_all ;;
+        0) exit 0 ;;
+        *) ;;
+    esac
+done
