@@ -12,6 +12,8 @@
 
 ## ✨ 核心特性
 
+- **🎨 交互式菜单 UI**：全新美观的 TUI 界面，一站式管理安装、配置、白名单、测试等所有功能。
+- **🛡️ 防火墙自锁保护**：应用白名单前自动放行 SSH，确保不会把自己锁在服务器外面。
 - **双部署模式**：支持 Docker 模式（推荐）和原生模式（适合低配 VPS），灵活应对不同硬件环境。
 - **多语言界面**：支持中文和英文，方便国际用户使用。
 - **智能端口检测**：安装前自动检测端口冲突，提供清晰的错误提示和解决建议。
@@ -26,6 +28,31 @@
 - **一键生成配置**：脚本运行结束直接输出 V2bX/NodePass 可用的 JSON 代码，复制粘贴即用。
 
 ## 🆕 最近更新
+
+### v8.0 - 2026年1月 交互式菜单版
+
+全新的交互式菜单 UI，提供更美观、更便捷的管理体验：
+
+**🔥 主要改进：**
+- **美观的交互式菜单**：全新设计的 TUI 界面，带有颜色、边框和图标
+- **完整的功能菜单**：
+  - 安装/重装解锁服务 (Docker/原生双模式)
+  - 查看运行状态 (端口、服务、内存占用)
+  - 管理 IP 白名单 (添加/删除/查看/应用)
+  - 生成 V2bX/Sing-box JSON 配置
+  - 测试解锁状态 (Ping/TCP/DNS劫持)
+  - 重启服务
+  - 一键清理 (停止服务/清理日志)
+  - 卸载解锁服务
+- **防火墙自锁保护**：在应用白名单前强制放行 SSH，防止把自己关在外面
+- **双模引擎优化**：
+  - Docker 模式：内置 Alpine 极简镜像，体积更小 (~100MB)
+  - 原生模式：优化的 systemd 服务配置，更稳定 (~50MB)
+
+**📋 使用交互式菜单：**
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/2.sh)
+```
 
 ### v5.0 - 2026年1月 精简版 - 精细化服务选择
 
@@ -54,6 +81,18 @@
 ## 🚀 快速开始
 
 请在你的 **解锁机 (能看奈飞/GPT的机器)** 上，以 `root` 身份执行以下命令：
+
+### 方式一：交互式菜单版 (推荐) ⭐
+
+美观的交互式界面，一站式管理所有功能：
+
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/2.sh)
+```
+
+### 方式二：传统安装脚本
+
+经典的向导式安装流程：
 
 ```bash
 bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/install.sh)
@@ -286,6 +325,24 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 卸载程序会自动检测部署模式（Docker 或原生）并完全清理所有组件。
 
 ## 🔧 管理命令
+
+### 使用交互式菜单管理 (推荐)
+
+```bash
+# 运行交互式管理菜单
+bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/2.sh)
+
+# 菜单选项：
+# 1) 安装 / 重装解锁服务
+# 2) 查看运行状态
+# 3) 管理 IP 白名单
+# 4) 生成 V2bX / Sing-box JSON 配置
+# 5) 测试解锁状态
+# 6) 重启服务
+# 7) 一键清理
+# 8) 卸载解锁服务
+# 0) 退出
+```
 
 ### 卸载服务
 
