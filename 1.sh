@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V11.0 强制清理版)
+#   V2bX 专用解锁服务总控脚本 (V12.0 原生修复版)
 #   
 #   修复日志：
-#   1. 修复 "Conflict. The container name is already in use" 错误
-#   2. 启动前强制删除名为 dns_unlock 的旧容器
-#   3. 增加 --remove-orphans 参数清理孤儿容器
+#   1. 状态检测升级：显示具体的端口占用进程名
+#   2. 原生模式增强：强力清除 Nginx/Apache 占用
+#   3. Sniproxy 权限与路径修复
 # ==========================================================
 
 RED='\033[0;31m'
@@ -31,19 +31,6 @@ check_root() {
     fi
 }
 
-spinner() {
-    local pid=$1
-    local msg=$2
-    local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
-    local i=0
-    while kill -0 $pid 2>/dev/null; do
-        i=$(( (i+1) %10 ))
-        printf "\r%s%s %s%s" "${YELLOW}" "${spin:$i:1}" "${msg}" "${NC}"
-        sleep 0.1
-    done
-    printf "\r\033[K"
-}
-
 save_config() {
     mkdir -p "$WORK_DIR"
     echo "FINAL_IP=\"$FINAL_IP\"" > "$CONFIG_FILE"
@@ -52,41 +39,42 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 暴力释放端口 & 清理 Docker
-force_cleanup() {
-    echo -e "${YELLOW}>>> 正在执行强制清理...${NC}"
+# 强力清理端口 (针对原生模式优化)
+force_cleanup_ports() {
+    echo -e "${YELLOW}>>> 正在清理端口占用 (Nginx/Apache)...${NC}"
     
-    # 1. 停止占用端口的系统服务
-    systemctl stop systemd-resolved 2>/dev/null
-    systemctl disable systemd-resolved 2>/dev/null
+    # 1. 停止并禁用常见的 Web 服务器
+    systemctl stop nginx 2>/dev/null
+    systemctl disable nginx 2>/dev/null
+    systemctl stop apache2 2>/dev/null
+    systemctl disable apache2 2>/dev/null
+    systemctl stop caddy 2>/dev/null
+    systemctl disable caddy 2>/dev/null
+    
+    # 2. 停止自身服务
     systemctl stop dnsmasq 2>/dev/null
     systemctl stop sniproxy 2>/dev/null
     
-    # 2. 杀掉占用进程
+    # 3. 解决 systemd-resolved (53端口)
+    systemctl stop systemd-resolved 2>/dev/null
+    systemctl disable systemd-resolved 2>/dev/null
+    
+    # 4. 暴力杀进程
     fuser -k 53/tcp 2>/dev/null
     fuser -k 53/udp 2>/dev/null
     fuser -k 80/tcp 2>/dev/null
     fuser -k 443/tcp 2>/dev/null
     
-    # 3. 【关键修复】强制删除旧的 Docker 容器
-    if command -v docker &> /dev/null; then
-        echo -e "${YELLOW}正在删除旧容器...${NC}"
-        docker rm -f dns_unlock 2>/dev/null
-        # 清理可能存在的 compose 项目
-        cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
-    fi
-    
-    # 临时修改 resolv.conf
+    # 临时修复 DNS 以防断网
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo -e "${GREEN}清理完毕${NC}"
+    echo -e "${GREEN}端口清理完毕${NC}"
 }
 
 # ==========================================================
-# 核心逻辑 (保持原版)
+# 核心逻辑 (完全保留)
 # ==========================================================
 
 define_rules() {
-    # 1. ChatGPT
     CONF_GPT="address=/openai.com/$FINAL_IP
 address=/chatgpt.com/$FINAL_IP
 address=/oaistatic.com/$FINAL_IP
@@ -94,7 +82,6 @@ address=/oaiusercontent.com/$FINAL_IP
 address=/ai.com/$FINAL_IP"
     JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"'
 
-    # 2. Gemini
     CONF_GEMINI="address=/gemini.google.com/$FINAL_IP
 address=/bard.google.com/$FINAL_IP
 address=/ai.google.dev/$FINAL_IP
@@ -104,19 +91,16 @@ address=/deepmind.com/$FINAL_IP
 address=/deepmind.google/$FINAL_IP"
     JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google"'
 
-    # 3. Copilot
     CONF_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
 address=/copilot.cloud.microsoft/$FINAL_IP
 address=/bing.com/$FINAL_IP
 address=/bingapis.com/$FINAL_IP"
     JSON_COPILOT='"copilot.microsoft.com", "copilot.cloud.microsoft", "bing.com", "bingapis.com"'
 
-    # 4. Claude
     CONF_CLAUDE="address=/anthropic.com/$FINAL_IP
 address=/claude.ai/$FINAL_IP"
     JSON_CLAUDE='"anthropic.com", "claude.ai"'
 
-    # 5. Netflix
     CONF_NETFLIX="address=/netflix.com/$FINAL_IP
 address=/netflix.net/$FINAL_IP
 address=/nflxvideo.net/$FINAL_IP
@@ -124,34 +108,29 @@ address=/nflximg.net/$FINAL_IP
 address=/nflxext.com/$FINAL_IP"
     JSON_NETFLIX='"netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflxext.com"'
 
-    # 6. Disney+
     CONF_DISNEY="address=/disney.com/$FINAL_IP
 address=/disneyplus.com/$FINAL_IP
 address=/dssott.com/$FINAL_IP
 address=/bamgrid.com/$FINAL_IP"
     JSON_DISNEY='"disney.com", "disneyplus.com", "dssott.com", "bamgrid.com"'
 
-    # 7. TikTok
     CONF_TIKTOK="address=/tiktok.com/$FINAL_IP
 address=/tiktokv.com/$FINAL_IP
 address=/tiktokcdn.com/$FINAL_IP
 address=/musical.ly/$FINAL_IP"
     JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "musical.ly"'
 
-    # 8. YouTube
     CONF_YOUTUBE="address=/youtube.com/$FINAL_IP
 address=/googlevideo.com/$FINAL_IP
 address=/ytimg.com/$FINAL_IP
 address=/ggpht.com/$FINAL_IP"
     JSON_YOUTUBE='"youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com"'
 
-    # 9. Spotify
     CONF_SPOTIFY="address=/spotify.com/$FINAL_IP
 address=/scdn.co/$FINAL_IP
 address=/spotifycdn.com/$FINAL_IP"
     JSON_SPOTIFY='"spotify.com", "scdn.co", "spotifycdn.com"'
 
-    # 10. HBO Max
     CONF_HBO="address=/hbomax.com/$FINAL_IP
 address=/max.com/$FINAL_IP
 address=/hbo.com/$FINAL_IP"
@@ -239,8 +218,8 @@ select_services_logic() {
 run_install() {
     check_root
     
-    # 强制清理端口和旧容器
-    force_cleanup
+    # 0. 强力清理端口 (修复原生模式冲突的关键)
+    force_cleanup_ports
     
     # 1. IP 选择
     IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
@@ -259,7 +238,6 @@ run_install() {
 
     # 2. 模式选择
     echo -e "\n${SKY}部署模式:${NC}"
-    echo -e "${YELLOW}注意: 如果 Docker 模式安装后端口仍不监听，请务必使用【原生模式】${NC}"
     echo "1. Docker 模式 (环境隔离)"
     echo "2. 原生模式 (推荐! 更稳定、省资源)"
     read -p "选择 [1-2] (默认1): " MODE_OPT
@@ -273,10 +251,12 @@ run_install() {
         echo -e "${YELLOW}>>> 正在安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
         
-        # 再次确保停止冲突服务
-        systemctl stop systemd-resolved 2>/dev/null
-        systemctl disable systemd-resolved 2>/dev/null
+        # 确保目录权限正确
+        mkdir -p /etc/dnsmasq.d
+        mkdir -p /var/log/sniproxy
+        chown daemon:daemon /var/log/sniproxy
         
+        # 配置 Dnsmasq
         cat > /etc/dnsmasq.conf <<EOF
 port=53
 no-resolv
@@ -284,10 +264,9 @@ server=8.8.8.8
 conf-dir=/etc/dnsmasq.d/,*.conf
 cache-size=1000
 EOF
-        mkdir -p /etc/dnsmasq.d
         cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
         
-        mkdir -p /var/log/sniproxy
+        # 配置 Sniproxy (修复 Pid 路径问题)
         cat > /etc/sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
@@ -298,8 +277,11 @@ listen 443 { proto tls; table https_hosts; }
 table http_hosts { .* *:80; }
 table https_hosts { .* *:443; }
 EOF
-        systemctl restart dnsmasq sniproxy
+        # 重启服务
+        systemctl unmask dnsmasq sniproxy
         systemctl enable dnsmasq sniproxy
+        systemctl restart dnsmasq
+        systemctl restart sniproxy
         
     # === Docker 模式 ===
     else
@@ -308,16 +290,13 @@ EOF
         
         cd "$WORK_DIR"
         
-        # Dockerfile
         cat > Dockerfile <<EOF
 FROM alpine:latest
 RUN apk add --no-cache dnsmasq sniproxy
-# 启动脚本
 RUN echo '#!/bin/sh' > /entrypoint.sh && \\
     echo 'dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf &' >> /entrypoint.sh && \\
     echo 'sniproxy -c /etc/sniproxy.conf -f' >> /entrypoint.sh && \\
     chmod +x /entrypoint.sh
-# 基础配置
 RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'no-resolv' >> /etc/dnsmasq.conf && \\
     echo 'server=8.8.8.8' >> /etc/dnsmasq.conf && \\
@@ -325,8 +304,6 @@ RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'cache-size=1000' >> /etc/dnsmasq.conf
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
-
-        # sniproxy.conf
         cat > sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
@@ -337,8 +314,6 @@ listen 443 { proto tls; table https_hosts; }
 table http_hosts { .* *; }
 table https_hosts { .* *; }
 EOF
-
-        # docker-compose.yml
         cat > docker-compose.yml <<EOF
 services:
   unlock:
@@ -351,13 +326,8 @@ services:
       - ./dnsmasq.conf:/etc/dnsmasq.d/custom_unlock.conf
       - ./sniproxy.conf:/etc/sniproxy.conf
 EOF
-        
-        echo -e "${YELLOW}启动容器...${NC}"
-        # 【关键修复】彻底删除旧容器和孤儿容器
         docker rm -f dns_unlock 2>/dev/null
         docker compose down --remove-orphans 2>/dev/null
-        
-        # 启动
         docker compose up -d --build --remove-orphans
     fi
 
@@ -397,18 +367,25 @@ fw_settings() {
     read -p "按回车返回..." _
 }
 
+# 改进的状态检查 (显示占用者)
 check_status() {
     clear
     echo -e "${SKY}>>> 系统状态检查${NC}"
     echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
     echo -e "模式: ${YELLOW}${DEPLOY_MODE:-未知}${NC}"
     
-    echo -e "\n端口监听状态 (53/80/443):"
+    echo -e "\n端口占用详情:"
     for p in 53 80 443; do
-        if ss -tuln | grep -q ":$p "; then 
-            echo -e "端口 $p: ${GREEN}正常 (监听中)${NC}"
-        else 
-            echo -e "端口 $p: ${RED}异常 (未监听)${NC}"
+        # 获取占用端口的进程名
+        proc=$(ss -tulnp | grep ":$p " | awk '{print $7}' | cut -d'"' -f2 | cut -d'/' -f2 | head -n1)
+        if [ -n "$proc" ]; then
+            if [[ "$proc" == "dnsmasq" || "$proc" == "sniproxy" || "$proc" == "docker-proxy" ]]; then
+                echo -e "端口 $p: ${GREEN}正常 ($proc)${NC}"
+            else
+                echo -e "端口 $p: ${RED}被占用 ($proc) - 需清理!${NC}"
+            fi
+        else
+            echo -e "端口 $p: ${RED}未监听${NC}"
         fi
     done
     
@@ -417,8 +394,14 @@ check_status() {
         if docker ps | grep -q "dns_unlock"; then echo -e "Docker: ${GREEN}运行中${NC}"; else echo -e "Docker: ${RED}停止${NC}"; fi
     else
         systemctl is-active dnsmasq >/dev/null && echo -e "Dnsmasq: ${GREEN}运行中${NC}" || echo -e "Dnsmasq: ${RED}停止${NC}"
-        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}" || echo -e "Sniproxy: ${RED}停止${NC}"
+        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}" || echo -e "Sniproxy: ${RED}停止 (被占用/配置错)${NC}"
     fi
+    
+    # 额外提示
+    if systemctl is-active nginx >/dev/null 2>&1 || systemctl is-active apache2 >/dev/null 2>&1; then
+        echo -e "\n${RED}警告: 发现 Nginx/Apache 正在运行，请重新执行安装以强制清理!${NC}"
+    fi
+    
     read -p "按回车返回..." _
 }
 
@@ -459,7 +442,6 @@ gen_json() {
     echo -e "解锁 IP: ${YELLOW}$FINAL_IP${NC}"
     echo -e "功能: ${SKY}审计屏蔽 + 选定解锁规则 + 兼容新版核心${NC}\n"
 
-    # 原版 JSON 结构
     cat <<EOF
 {
   "dns": {
@@ -572,7 +554,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V11.0 终极排错版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V12.0 原生修复版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
@@ -581,7 +563,7 @@ while true; do
     echo -e "${YELLOW}2) 设置白名单 IP (防火墙)${NC}"
     echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置 (含审计)${NC}"
     echo -e "${YELLOW}4) 查看运行状态${NC}"
-    echo -e "${YELLOW}5) 查看错误日志 (Debug)${NC}"
+    echo -e "${YELLOW}5) 查看错误日志${NC}"
     echo -e "${RED}6) 卸载服务${NC}"
     echo -e "${RED}0) 退出${NC}"
     echo ""
