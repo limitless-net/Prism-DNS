@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V22.0 终极运营版)
+#   V2bX 专用解锁服务总控脚本 (V22.1 完整修复版)
 #   
-#   更新日志：
-#   1. [优化] JSON 生成逻辑，增加 DNS 容灾配置
-#   2. [新增] "查看审计规则详情" 菜单
-#   3. [说明] 明确了对 V2bX 用户限制无影响
+#   修复日志：
+#   1. [修复] 补全了 V22.0 因篇幅过长被截断的代码
+#   2. [功能] 包含白名单管理、容灾DNS、审计规则、实时监控
+#   3. [稳定] 内置端口猎杀和 Docker 官方镜像支持
 # ==========================================================
 
 RED='\033[0;31m'
@@ -415,6 +415,7 @@ EOF
     check_status
 }
 
+# 1. 修改解锁规则 (热更新)
 modify_services() {
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     echo -e "${SKY}>>> 修改解锁规则 (无需重装)${NC}"
@@ -434,6 +435,7 @@ modify_services() {
     if [[ "$view_json" == "y" ]]; then gen_json; fi
 }
 
+# 2. 重启服务
 restart_services() {
     echo -e "${SKY}>>> 正在重启服务...${NC}"
     if [ "$DEPLOY_MODE" == "native" ]; then
@@ -453,12 +455,14 @@ restart_services() {
     read -p "按回车返回..." _
 }
 
+# 3. 实时流量监控
 monitor_traffic() {
     if [ -z "$DEPLOY_MODE" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     clear
     echo -e "${SKY}>>> 实时流量监控 (Ctrl+C 退出)${NC}"
     echo -e "${YELLOW}显示格式: [来源IP] -> [目标域名]${NC}"
     echo -e "------------------------------------------------"
+    
     if [ "$DEPLOY_MODE" == "docker" ]; then
         docker logs -f dns_unlock
     else
@@ -566,3 +570,108 @@ gen_json() {
         "address": "1.1.1.1",
         "detour": "direct"
       }
+    ],
+    "rules": [
+      {
+        "domain_suffix": [${FINAL_JSON_LIST}],
+        "server": "unlock_dns",
+        "disable_cache": true
+      }
+    ],
+    "final": "local_dns",
+    "strategy": "prefer_ipv4"
+  },
+  "outbounds": [
+    {
+      "tag": "direct",
+      "type": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "rules": [
+      {
+        "protocol": "dns",
+        "outbound": "direct"
+      },
+      {
+        "ip_cidr": ["${IP_CIDR}"],
+        "outbound": "direct"
+      },
+      {
+        "protocol": "quic",
+        "outbound": "block"
+      },
+      {
+        "domain_suffix": [${FINAL_JSON_LIST}],
+        "outbound": "direct"
+      },
+      {
+        "ip_is_private": true,
+        "outbound": "block"
+      },
+      {
+        "domain_regex": [
+            "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
+            "(.+.|^)(360|so).(cn|com)",
+            "(Subject|HELO|SMTP)",
+            "(torrent|.torrent|peer_id=|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=)",
+            "(^.@)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168).(info|biz|com|de|net|org|me|la)",
+            "(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
+            "(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
+            "(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)"
+        ],
+        "outbound": "block"
+      },
+      { "outbound": "direct", "network": ["udp","tcp"] }
+    ],
+    "auto_detect_interface": false
+  }
+}
+EOF
+    echo ""
+    read -p "按回车返回菜单..." _
+}
+
+# ==========================================================
+# 主菜单
+# ==========================================================
+
+while true; do
+    clear
+    echo -e "${SKY}==================================================${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.1 终极运营版)${NC}"
+    echo -e "${SKY}==================================================${NC}\n"
+    echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
+    echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
+
+    echo -e "${YELLOW}1) 安装 / 重装解锁服务${NC}"
+    echo -e "${YELLOW}2) 管理白名单 (允许连接的 IP)${NC}"
+    echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置${NC}"
+    echo -e "${YELLOW}4) 查看运行状态${NC}"
+    echo -e "${BLUE}5) 实时流量监控${NC}"
+    echo -e "${BLUE}6) 修改解锁规则 (热更新)${NC}"
+    echo -e "${BLUE}7) 重启服务${NC}"
+    echo -e "${BLUE}8) 查看审计规则详情${NC}"
+    echo -e "${RED}9) 卸载服务${NC}"
+    echo -e "${RED}0) 退出${NC}"
+    echo ""
+    read -p ">> " choice
+
+    case "$choice" in
+        1) run_install ;;
+        2) manage_whitelist ;;
+        3) gen_json ;;
+        4) check_status ;;
+        5) monitor_traffic ;;
+        6) modify_services ;;
+        7) restart_services ;;
+        8) view_audit ;;
+        9) uninstall_all ;;
+        0) exit 0 ;;
+        *) ;;
+    esac
+done
