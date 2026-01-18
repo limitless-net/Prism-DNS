@@ -61,9 +61,6 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 
 > **注意**：请确保机器已安装 `curl`，若未安装可先执行 `apt update && apt install -y curl`
 
-### 独立配置模板（仅审计规则）
-
-如果你只需要审计规则配置（屏蔽 BT/P2P、回国流量等），无需解锁功能，可以直接使用项目中的 [`v2bx_config_template.json`](./v2bx_config_template.json) 文件：
 
 ```bash
 # 下载模板文件
