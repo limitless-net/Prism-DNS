@@ -62,14 +62,6 @@ bash <(curl -Ls https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/i
 > **注意**：请确保机器已安装 `curl`，若未安装可先执行 `apt update && apt install -y curl`
 
 
-```bash
-# 下载模板文件
-curl -O https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/v2bx_config_template.json
-
-# 查看内容
-cat v2bx_config_template.json
-```
-
 此模板仅包含审计规则（屏蔽 BT、回国流量等），**不包含解锁功能**。如需解锁 Netflix/ChatGPT 等服务，请运行安装脚本生成完整配置。
 
 ## ⚙️ 使用流程
