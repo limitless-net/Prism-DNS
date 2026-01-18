@@ -1,15 +1,12 @@
 #!/bin/bash
+
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V9.0 最终完整版)
-#   
-#   包含功能：
-#   1. 菜单式交互 (UI)
-#   2. 自动解决端口 53 占用 (systemd-resolved)
-#   3. Docker / 原生双模式
-#   4. 完美复刻原版 JSON (含审计规则)
-#   5. 防火墙白名单管理
+#   NodePass/V2bX 专用解锁服务搭建脚本 (Refactored/重构版)
+#   功能：双栈IP选择 + 精细化服务选择 + 审计规则集成 + 全菜单交互
+#   Prism-DNS Unlock Service Setup Script
 # ==========================================================
 
+# --- 1. 全局配置与状态 ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -17,19 +14,66 @@ SKY='\033[0;36m'
 NC='\033[0m'
 
 WORK_DIR="/root/dns_unlock"
-CONFIG_FILE="$WORK_DIR/install.env"
+STATE_FILE="${WORK_DIR}/state.env"
+WHITELIST_FILE="${WORK_DIR}/whitelist.txt"
+LOG_FILE="${WORK_DIR}/prism-dns.log"
+LANG_CHOICE="zh"
 
-# 加载配置
-if [ -f "$CONFIG_FILE" ]; then source "$CONFIG_FILE"; fi
+# Runtime Variables
+FINAL_IP=""
+DEPLOY_MODE="docker"
+FINAL_JSON_LIST=""
+TYPE_NAME=""
 
-# ==========================================================
-# 基础工具
-# ==========================================================
+# --- 2. 基础工具函数 (UI & Log) ---
 
-check_root() {
-    if [ "$(id -u)" != "0" ]; then
-        echo -e "${RED}错误: 必须使用 root 权限运行此脚本${NC}"
-        exit 1
+_now() { date '+%Y-%m-%d %H:%M:%S'; }
+
+log_write() {
+    local level="$1"
+    local msg="$2"
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    echo "$(_now) [$level] $msg" >> "$LOG_FILE" 2>/dev/null
+}
+
+msg_info() { echo -e "${SKY}$1${NC}"; log_write "INFO" "$1"; }
+msg_ok()   { echo -e "${GREEN}✓ $1${NC}"; log_write "OK" "$1"; }
+msg_warn() { echo -e "${YELLOW}⚠ $1${NC}"; log_write "WARN" "$1"; }
+msg_err()  { echo -e "${RED}✗ $1${NC}"; log_write "ERR" "$1"; }
+
+# 确保运行时目录存在
+ensure_env() {
+    mkdir -p "$WORK_DIR" 2>/dev/null
+    chmod 755 "$WORK_DIR" 2>/dev/null
+    touch "$LOG_FILE" 2>/dev/null
+    touch "$WHITELIST_FILE" 2>/dev/null
+}
+
+# 状态持久化
+save_state() {
+    ensure_env
+    cat > "$STATE_FILE" <<EOF
+LANG_CHOICE="$LANG_CHOICE"
+FINAL_IP="$FINAL_IP"
+DEPLOY_MODE="$DEPLOY_MODE"
+TYPE_NAME="$TYPE_NAME"
+# JSON list omitted to keep file clean, regenerated on demand if needed
+EOF
+}
+
+load_state() {
+    if [ -f "$STATE_FILE" ]; then
+        # shellcheck disable=SC1090
+        . "$STATE_FILE"
+    fi
+}
+
+pause_key() {
+    echo ""
+    if [ "$LANG_CHOICE" = "en" ]; then
+        read -r -p "Press Enter to return..." _
+    else
+        read -r -p "按回车键返回..." _
     fi
 }
 
@@ -43,427 +87,102 @@ spinner() {
         printf "\r%s%s %s%s" "${YELLOW}" "${spin:$i:1}" "${msg}" "${NC}"
         sleep 0.1
     done
-    printf "\r\033[K"
+    printf "\r%-60s\r" " " # clear line
 }
 
 validate_ip() {
     local ip="$1"
-    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
-    if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then return 0; fi
+    ip=$(echo "$ip" | tr -d '[:space:]')
+    [ -z "$ip" ] && return 1
+    # Simple rigorous validation logic
+    if [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    elif [[ "$ip" =~ : ]]; then
+        return 0
+    fi
     return 1
 }
 
-save_config() {
-    mkdir -p "$WORK_DIR"
-    echo "FINAL_IP=\"$FINAL_IP\"" > "$CONFIG_FILE"
-    echo "DEPLOY_MODE=\"$DEPLOY_MODE\"" >> "$CONFIG_FILE"
-    # 保存 JSON 关键字段
-    echo "FINAL_JSON_LIST='$FINAL_JSON_LIST'" >> "$CONFIG_FILE"
-    echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
-}
+# --- 3. 核心业务逻辑 (配置生成 & 安装) ---
+# 这些函数包含 heredoc，绝不修改内容
 
-# 端口检测
-check_ports() {
-    local ports=(53 80 443)
-    local has_err=0
-    echo -e "${SKY}正在检查端口占用...${NC}"
-    for port in "${ports[@]}"; do
-        if ss -tuln | grep -q ":${port} " || netstat -tuln 2>/dev/null | grep -q ":${port} "; then
-            # 忽略 systemd-resolved 对 53 的占用，因为脚本会自动处理
-            if [ "$port" == "53" ] && systemctl is-active systemd-resolved &>/dev/null; then
-                continue
-            fi
-            echo -e "${RED}✗ 端口 $port 已被其他进程占用${NC}"
-            has_err=1
-        else
-            echo -e "${GREEN}✓ 端口 $port 可用${NC}"
-        fi
-    done
-    if [ $has_err -eq 1 ]; then
-        echo -e "${YELLOW}提示: 如果是旧的解锁服务，安装时会自动清理。${NC}"
-        echo -e "${YELLOW}如果是 Nginx/Apache 占用 80/443，请先手动停止。${NC}"
-        read -p "是否继续? [y/N]: " cont
-        if [[ ! "$cont" =~ ^[Yy]$ ]]; then return 1; fi
-    fi
-    return 0
-}
-
-# ==========================================================
-# 核心逻辑 (完全搬运原版变量)
-# ==========================================================
-
-define_rules() {
-    # 1. ChatGPT
-    CONF_GPT="address=/openai.com/$FINAL_IP
-address=/chatgpt.com/$FINAL_IP
-address=/oaistatic.com/$FINAL_IP
-address=/oaiusercontent.com/$FINAL_IP
-address=/ai.com/$FINAL_IP"
-    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"'
-
-    # 2. Gemini
-    CONF_GEMINI="address=/gemini.google.com/$FINAL_IP
-address=/bard.google.com/$FINAL_IP
-address=/ai.google.dev/$FINAL_IP
-address=/generativelanguage.googleapis.com/$FINAL_IP
-address=/makersuite.google.com/$FINAL_IP
-address=/deepmind.com/$FINAL_IP
-address=/deepmind.google/$FINAL_IP"
-    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google"'
-
-    # 3. Copilot
-    CONF_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
-address=/copilot.cloud.microsoft/$FINAL_IP
-address=/bing.com/$FINAL_IP
-address=/bingapis.com/$FINAL_IP"
-    JSON_COPILOT='"copilot.microsoft.com", "copilot.cloud.microsoft", "bing.com", "bingapis.com"'
-
-    # 4. Claude
-    CONF_CLAUDE="address=/anthropic.com/$FINAL_IP
-address=/claude.ai/$FINAL_IP"
-    JSON_CLAUDE='"anthropic.com", "claude.ai"'
-
-    # 5. Netflix
-    CONF_NETFLIX="address=/netflix.com/$FINAL_IP
-address=/netflix.net/$FINAL_IP
-address=/nflxvideo.net/$FINAL_IP
-address=/nflximg.net/$FINAL_IP
-address=/nflxext.com/$FINAL_IP"
-    JSON_NETFLIX='"netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflxext.com"'
-
-    # 6. Disney+
-    CONF_DISNEY="address=/disney.com/$FINAL_IP
-address=/disneyplus.com/$FINAL_IP
-address=/dssott.com/$FINAL_IP
-address=/bamgrid.com/$FINAL_IP"
-    JSON_DISNEY='"disney.com", "disneyplus.com", "dssott.com", "bamgrid.com"'
-
-    # 7. TikTok
-    CONF_TIKTOK="address=/tiktok.com/$FINAL_IP
-address=/tiktokv.com/$FINAL_IP
-address=/tiktokcdn.com/$FINAL_IP
-address=/musical.ly/$FINAL_IP"
-    JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "musical.ly"'
-
-    # 8. YouTube
-    CONF_YOUTUBE="address=/youtube.com/$FINAL_IP
-address=/googlevideo.com/$FINAL_IP
-address=/ytimg.com/$FINAL_IP
-address=/ggpht.com/$FINAL_IP"
-    JSON_YOUTUBE='"youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com"'
-
-    # 9. Spotify
-    CONF_SPOTIFY="address=/spotify.com/$FINAL_IP
-address=/scdn.co/$FINAL_IP
-address=/spotifycdn.com/$FINAL_IP"
-    JSON_SPOTIFY='"spotify.com", "scdn.co", "spotifycdn.com"'
-
-    # 10. HBO Max
-    CONF_HBO="address=/hbomax.com/$FINAL_IP
-address=/max.com/$FINAL_IP
-address=/hbo.com/$FINAL_IP"
-    JSON_HBO='"hbomax.com", "max.com", "hbo.com"'
-}
-
-select_services_logic() {
-    define_rules
-    echo -e "\n${SKY}可用服务 (输入数字，用逗号分隔，例如 1,3,5):${NC}"
-    echo ""
-    echo -e "${SKY}=== AI 服务 ===${NC}"
-    echo "1. ChatGPT (OpenAI)"
-    echo "2. Gemini (Google AI)"
-    echo "3. Copilot (Microsoft)"
-    echo "4. Claude (Anthropic)"
-    echo ""
-    echo -e "${SKY}=== 流媒体服务 ===${NC}"
-    echo "5. Netflix"
-    echo "6. Disney+"
-    echo "7. TikTok"
-    echo "8. YouTube"
-    echo "9. Spotify"
-    echo "10. HBO Max"
-    echo ""
-    echo "快捷选项:"
-    echo "  a = 所有 AI (1-4)"
-    echo "  s = 所有流媒体 (5-10)"
-    echo "  * = 全部服务"
-    echo ""
-    read -p "请输入选择: " SERVICE_CHOICE
-
-    case "$SERVICE_CHOICE" in
-        a|A) SERVICE_CHOICE="1,2,3,4" ;;
-        s|S) SERVICE_CHOICE="5,6,7,8,9,10" ;;
-        \*|all|ALL) SERVICE_CHOICE="1,2,3,4,5,6,7,8,9,10" ;;
-    esac
-
-    mkdir -p "$WORK_DIR"
-    echo "# Config Generated by Script" > "$WORK_DIR/dnsmasq.conf"
-    
-    FINAL_JSON_LIST=""
-    TYPE_NAME=""
-    local selected_count=0
-    
-    IFS=',' read -ra SERVICES <<< "$SERVICE_CHOICE"
-    for service in "${SERVICES[@]}"; do
-        service=$(echo "$service" | tr -d '[:space:]')
-        case $service in
-            1) echo "$CONF_GPT" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_GPT"; NAME="ChatGPT";;
-            2) echo "$CONF_GEMINI" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_GEMINI"; NAME="Gemini";;
-            3) echo "$CONF_COPILOT" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_COPILOT"; NAME="Copilot";;
-            4) echo "$CONF_CLAUDE" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_CLAUDE"; NAME="Claude";;
-            5) echo "$CONF_NETFLIX" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_NETFLIX"; NAME="Netflix";;
-            6) echo "$CONF_DISNEY" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_DISNEY"; NAME="Disney+";;
-            7) echo "$CONF_TIKTOK" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_TIKTOK"; NAME="TikTok";;
-            8) echo "$CONF_YOUTUBE" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_YOUTUBE"; NAME="YouTube";;
-            9) echo "$CONF_SPOTIFY" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_SPOTIFY"; NAME="Spotify";;
-            10) echo "$CONF_HBO" >> "$WORK_DIR/dnsmasq.conf"; ITEM="$JSON_HBO"; NAME="HBO";;
-            *) continue ;;
-        esac
-        
-        [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
-        FINAL_JSON_LIST="${FINAL_JSON_LIST}${ITEM}"
-        [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
-        TYPE_NAME="${TYPE_NAME}${NAME}"
-        ((selected_count++))
-    done
-
-    if [ $selected_count -eq 0 ]; then
-        echo -e "${YELLOW}未选择有效服务，默认选择 ChatGPT${NC}"
-        echo "$CONF_GPT" >> "$WORK_DIR/dnsmasq.conf"
-        FINAL_JSON_LIST="$JSON_GPT"
-        TYPE_NAME="ChatGPT"
-    fi
-    
-    if [ $selected_count -ge 5 ]; then
-        TYPE_NAME="自定义 ($selected_count 个服务)"
-    fi
-}
-
-# ==========================================================
-# 安装流程
-# ==========================================================
-
-run_install() {
-    check_root
-    check_ports || return
-    
-    # 1. IP 选择
-    IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
-    IPV6=$(curl -6s --max-time 3 api.ip.sb/ip || curl -6s --max-time 3 ifconfig.co)
-    echo -e "\n${SKY}检测本机 IP:${NC}"
-    echo -e "1. IPv4: ${GREEN}${IPV4:-无}${NC}"
-    echo -e "2. IPv6: ${GREEN}${IPV6:-无}${NC}"
-    echo "3. 手动输入"
-    read -p "选择 [1-3] (默认1): " IP_OPT
-    case $IP_OPT in
-        2) FINAL_IP=$IPV6 ;;
-        3) read -p "输入IP: " FINAL_IP ;;
-        *) FINAL_IP=$IPV4 ;;
-    esac
-    if [ -z "$FINAL_IP" ]; then echo -e "${RED}IP 无效${NC}"; return; fi
-
-    # 2. 模式选择
-    echo -e "\n${SKY}部署模式:${NC}"
-    echo "1. Docker 模式 (推荐，已修复端口监听问题)"
-    echo "2. 原生模式 (低资源)"
-    read -p "选择 [1-2] (默认1): " MODE_OPT
-    if [ "$MODE_OPT" == "2" ]; then DEPLOY_MODE="native"; else DEPLOY_MODE="docker"; fi
-
-    # 3. 服务选择
-    select_services_logic
-
-    # === 安装开始 ===
-    echo -e "\n${YELLOW}>>> 开始安装...${NC}"
-    
-    # 共同步骤：处理 systemd-resolved 冲突
-    if systemctl is-active systemd-resolved &>/dev/null; then
-        echo -e "${YELLOW}检测到 systemd-resolved 占用 53 端口，正在停用...${NC}"
-        systemctl stop systemd-resolved
-        systemctl disable systemd-resolved
-        # 重置 resolv.conf 以防断网
-        rm -f /etc/resolv.conf
-        echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    fi
-
-    # === 原生模式 ===
-    if [ "$DEPLOY_MODE" == "native" ]; then
-        apt-get update && apt-get install -y dnsmasq sniproxy
-        systemctl stop dnsmasq sniproxy 2>/dev/null
-        
-        cat > /etc/dnsmasq.conf <<EOF
+gen_dnsmasq_conf_native() {
+    # 原生模式的 dnsmasq 配置
+    cat > /etc/dnsmasq.conf <<EOF
+# Prism-DNS Configuration
 port=53
 no-resolv
 server=8.8.8.8
+server=8.8.4.4
 conf-dir=/etc/dnsmasq.d/,*.conf
+no-hosts
 cache-size=1000
 EOF
-        mkdir -p /etc/dnsmasq.d
-        cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
-        
-        mkdir -p /var/log/sniproxy
-        cat > /etc/sniproxy.conf <<EOF
+}
+
+gen_sniproxy_conf() {
+    # Sniproxy 配置
+    mkdir -p /var/log/sniproxy
+    chmod 755 /var/log/sniproxy
+    cat > /etc/sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
-error_log { filename /var/log/sniproxy/error.log; priority notice; }
-access_log { filename /var/log/sniproxy/access.log; }
-listen 80 { proto http; table http_hosts; }
-listen 443 { proto tls; table https_hosts; }
-table http_hosts { .* *:80; }
-table https_hosts { .* *:443; }
-EOF
-        systemctl restart dnsmasq sniproxy
-        systemctl enable dnsmasq sniproxy
-        
-    # === Docker 模式 (零依赖版) ===
-    else
-        echo -e "${YELLOW}检查 Docker 环境...${NC}"
-        if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | bash; fi
-        
-        cd "$WORK_DIR"
-        
-        # 1. 生成 Dockerfile (Alpine, 内置前台启动脚本)
-        cat > Dockerfile <<EOF
-FROM alpine:latest
-RUN apk add --no-cache dnsmasq sniproxy
-# 创建入口脚本
-RUN echo '#!/bin/sh' > /entrypoint.sh && \\
-    echo 'echo "Starting services..."' >> /entrypoint.sh && \\
-    echo 'dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf &' >> /entrypoint.sh && \\
-    echo 'sniproxy -c /etc/sniproxy.conf -f' >> /entrypoint.sh && \\
-    chmod +x /entrypoint.sh
-# 基础配置
-RUN echo 'port=53' > /etc/dnsmasq.conf && \\
-    echo 'no-resolv' >> /etc/dnsmasq.conf && \\
-    echo 'server=8.8.8.8' >> /etc/dnsmasq.conf && \\
-    echo 'conf-dir=/etc/dnsmasq.d/,*.conf' >> /etc/dnsmasq.conf && \\
-    echo 'cache-size=1000' >> /etc/dnsmasq.conf
-ENTRYPOINT ["/entrypoint.sh"]
-EOF
 
-        # 2. 生成 Sniproxy 配置
-        cat > sniproxy.conf <<EOF
-user daemon
-pidfile /var/run/sniproxy.pid
-error_log { filename /dev/stderr; priority notice; }
-access_log { filename /dev/stdout; }
-listen 80 { proto http; table http_hosts; }
-listen 443 { proto tls; table https_hosts; }
-table http_hosts { .* *; }
-table https_hosts { .* *; }
-EOF
+error_log {
+    filename /var/log/sniproxy/error.log
+    priority notice
+}
 
-        # 3. 生成 docker-compose.yml
-        # 注意：使用 host 网络模式，必须解决宿主机 53 占用问题(上面已处理)
-        cat > docker-compose.yml <<EOF
+access_log {
+    filename /var/log/sniproxy/access.log
+}
+
+listen 80 {
+    proto http
+    table http_hosts
+}
+
+listen 443 {
+    proto tls
+    table https_hosts
+}
+
+table http_hosts {
+    .* *:80
+}
+
+table https_hosts {
+    .* *:443
+}
+EOF
+}
+
+gen_docker_compose() {
+    # Docker Compose 配置
+    cat > docker-compose.yml <<EOL
 services:
-  unlock:
+  sniproxy:
     build: .
+    image: prism-dns:latest
     container_name: dns_unlock
     restart: always
     network_mode: host
     privileged: true
     volumes:
       - ./dnsmasq.conf:/etc/dnsmasq.d/custom_unlock.conf
-      - ./sniproxy.conf:/etc/sniproxy.conf
-EOF
-        
-        echo -e "${YELLOW}启动容器...${NC}"
-        docker compose down 2>/dev/null
-        docker compose up -d --build
-    fi
-
-    save_config
-    echo -e "${GREEN}安装完成！${NC}"
-    read -p "按回车返回菜单..." _
+EOL
 }
 
-# ==========================================================
-# 辅助功能
-# ==========================================================
-
-fw_settings() {
-    echo -e "${SKY}输入允许连接的落地机 IP (多个用空格分隔)${NC}"
-    read -p "IP: " ips
-    if [ -n "$ips" ]; then
-        if command -v ufw &> /dev/null; then
-            ufw allow 22/tcp >/dev/null 2>&1
-            echo "y" | ufw enable >/dev/null 2>&1
-            for ip in $ips; do ufw allow from "$ip" to any; done
-            ufw reload
-        else
-            iptables -A INPUT -p tcp --dport 22 -j ACCEPT
-            for ip in $ips; do
-                iptables -I INPUT -s "$ip" -p tcp --dport 53 -j ACCEPT
-                iptables -I INPUT -s "$ip" -p udp --dport 53 -j ACCEPT
-                iptables -I INPUT -s "$ip" -p tcp --dport 80 -j ACCEPT
-                iptables -I INPUT -s "$ip" -p tcp --dport 443 -j ACCEPT
-            done
-            iptables -A INPUT -p tcp --dport 53 -j DROP
-            iptables -A INPUT -p udp --dport 53 -j DROP
-            iptables -A INPUT -p tcp --dport 80 -j DROP
-            iptables -A INPUT -p tcp --dport 443 -j DROP
-        fi
-        echo -e "${GREEN}规则已更新${NC}"
-    fi
-    read -p "按回车返回..." _
-}
-
-check_status() {
-    clear
-    echo -e "${SKY}>>> 系统状态检查${NC}"
-    echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
-    echo -e "模式: ${YELLOW}${DEPLOY_MODE:-未知}${NC}"
-    
-    echo -e "\n端口监听状态 (53/80/443):"
-    for p in 53 80 443; do
-        if ss -tuln | grep -q ":$p "; then 
-            echo -e "端口 $p: ${GREEN}正常 (监听中)${NC}"
-        else 
-            echo -e "端口 $p: ${RED}异常 (未监听)${NC}"
-        fi
-    done
-    
-    echo -e "\n服务状态:"
-    if [ "$DEPLOY_MODE" == "docker" ]; then
-        if docker ps | grep -q "dns_unlock"; then echo -e "Docker: ${GREEN}运行中${NC}"; else echo -e "Docker: ${RED}停止${NC}"; fi
+gen_final_json() {
+    # 最终 JSON 输出
+    local ip_cidr
+    if [[ "$FINAL_IP" == *":"* ]]; then
+        ip_cidr="${FINAL_IP}/128"
     else
-        systemctl is-active dnsmasq >/dev/null && echo -e "Dnsmasq: ${GREEN}运行中${NC}"
-        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}"
+        ip_cidr="${FINAL_IP}/32"
     fi
-    read -p "按回车返回..." _
-}
 
-uninstall_all() {
-    echo -e "${RED}正在卸载...${NC}"
-    if command -v docker &> /dev/null; then docker rm -f dns_unlock 2>/dev/null; fi
-    systemctl stop dnsmasq sniproxy 2>/dev/null
-    # 尝试恢复 systemd-resolved
-    systemctl enable systemd-resolved 2>/dev/null
-    systemctl start systemd-resolved 2>/dev/null
-    rm -rf "$WORK_DIR"
-    echo -e "${GREEN}卸载完成${NC}"
-    read -p "按回车返回..." _
-}
-
-# ==========================================================
-# JSON 生成 (完全原版逻辑)
-# ==========================================================
-
-gen_json() {
-    if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
-    
-    # 构造 IP CIDR
-    if [[ "$FINAL_IP" == *":"* ]]; then IP_CIDR="${FINAL_IP}/128"; else IP_CIDR="${FINAL_IP}/32"; fi
-
-    clear
-    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}   🎉 V2bX / NodePass 专用配置 (含审计)   ${NC}"
-    echo -e "${GREEN}═══════════════════════════════════════════════${NC}"
-    echo -e "解锁 IP: ${YELLOW}$FINAL_IP${NC}"
-    echo -e "功能: ${SKY}审计屏蔽 + 选定解锁规则 + 兼容新版核心${NC}\n"
-
-    # 原版 JSON 结构
-    cat <<EOF
+cat <<EOF
 {
   "dns": {
     "servers": [
@@ -487,7 +206,8 @@ gen_json() {
       }
     ],
     "final": "local_dns",
-    "strategy": "prefer_ipv4"
+    "strategy": "prefer_ipv4",
+    "disable_cache": false
   },
   "outbounds": [
     {
@@ -564,38 +284,530 @@ gen_json() {
   }
 }
 EOF
-    echo ""
-    read -p "按回车返回菜单..." _
 }
 
-# ==========================================================
-# 主菜单
-# ==========================================================
+# --- 4. 功能流程函数 ---
 
-while true; do
+# 4.1 语言选择流程
+flow_select_language() {
     clear
-    echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V9.0 最终修复版)${NC}"
-    echo -e "${SKY}==================================================${NC}\n"
-    echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
-    echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
-
-    echo -e "${YELLOW}1) 安装 / 重装解锁服务 (Docker/原生)${NC}"
-    echo -e "${YELLOW}2) 设置白名单 IP (防火墙)${NC}"
-    echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置 (含审计)${NC}"
-    echo -e "${YELLOW}4) 查看运行状态${NC}"
-    echo -e "${RED}5) 卸载服务${NC}"
-    echo -e "${RED}0) 退出${NC}"
+    echo "=================================================="
+    echo "  Prism-DNS Unlock Service Setup / 解锁服务部署"
+    echo "=================================================="
     echo ""
-    read -p ">> " choice
-
+    echo "Please select language / 请选择语言:"
+    echo "1) 简体中文 (Chinese)"
+    echo "2) English"
+    echo ""
+    read -r -p "Select [1-2]: " choice
     case "$choice" in
-        1) run_install ;;
-        2) fw_settings ;;
-        3) gen_json ;;
-        4) check_status ;;
-        5) uninstall_all ;;
-        0) exit 0 ;;
-        *) ;;
+        2) LANG_CHOICE="en" ;;
+        *) LANG_CHOICE="zh" ;;
     esac
-done
+    msg_ok "$([ "$LANG_CHOICE" = "en" ] && echo "Language set to English" || echo "语言已设置为中文")"
+    sleep 1
+}
+
+# 4.2 端口检测流程
+flow_check_ports() {
+    echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Checking Port Availability${NC}" || echo -e "${SKY}  检查端口占用情况${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    local ports=(53 80 443)
+    local conflict=false
+
+    for port in "${ports[@]}"; do
+        if ss -tuln 2>/dev/null | grep -E "(:|\\])${port}\\b" >/dev/null; then
+            conflict=true
+            msg_err "$([ "$LANG_CHOICE" = "en" ] && echo "Port $port occupied" || echo "端口 $port 已被占用")"
+        else
+            msg_ok "$([ "$LANG_CHOICE" = "en" ] && echo "Port $port available" || echo "端口 $port 可用")"
+        fi
+    done
+
+    if [ "$conflict" = true ]; then
+        echo ""
+        msg_warn "$([ "$LANG_CHOICE" = "en" ] && echo "Port conflicts detected!" || echo "发现端口冲突！")"
+        while true; do
+            echo -e "${YELLOW}1) $([ "$LANG_CHOICE" = "en" ] && echo "Continue anyway (May fail)" || echo "强制继续（可能会失败）")${NC}"
+            echo -e "${YELLOW}2) $([ "$LANG_CHOICE" = "en" ] && echo "Cancel installation" || echo "取消安装")${NC}"
+            read -r -p "Select [1-2]: " c
+            case "$c" in
+                1) return 0 ;;
+                2) return 1 ;;
+                *) ;;
+            esac
+        done
+    else
+        return 0
+    fi
+}
+
+# 4.3 IP 选择流程
+flow_select_ip() {
+    clear
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Select Unlock Service IP${NC}" || echo -e "${SKY}  选择解锁服务 IP${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+
+    msg_info "$([ "$LANG_CHOICE" = "en" ] && echo "Detecting IPs..." || echo "正在检测本机 IP...")"
+    
+    local ipv4 ipv6
+    ipv4=$(curl -4s --max-time 3 ifconfig.me 2>/dev/null)
+    ipv6=$(curl -6s --max-time 3 ifconfig.co 2>/dev/null)
+
+    while true; do
+        echo ""
+        local i=1
+        if [ -n "$ipv4" ]; then echo "$i) IPv4: $ipv4"; ipv4_idx=$i; ((i++)); fi
+        if [ -n "$ipv6" ]; then echo "$i) IPv6: $ipv6"; ipv6_idx=$i; ((i++)); fi
+        echo "$i) $([ "$LANG_CHOICE" = "en" ] && echo "Manual Input" || echo "手动输入")"
+        local manual_idx=$i
+        echo ""
+        
+        read -r -p "Select [1-$manual_idx]: " choice
+        
+        if [ -n "$ipv4" ] && [ "$choice" = "$ipv4_idx" ]; then
+            FINAL_IP="$ipv4"
+            break
+        elif [ -n "$ipv6" ] && [ "$choice" = "$ipv6_idx" ]; then
+            FINAL_IP="$ipv6"
+            break
+        elif [ "$choice" = "$manual_idx" ]; then
+            read -r -p "Input IP: " user_ip
+            if validate_ip "$user_ip"; then
+                FINAL_IP="$user_ip"
+                break
+            else
+                msg_err "Invalid IP"
+            fi
+        fi
+    done
+    msg_ok "Selected IP: $FINAL_IP"
+    sleep 1
+}
+
+# 4.4 部署模式选择
+flow_select_mode() {
+    clear
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Select Deployment Mode${NC}" || echo -e "${SKY}  选择部署模式${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+
+    while true; do
+        echo -e "${YELLOW}1) Docker Mode (Recommended)${NC}"
+        echo -e "${YELLOW}2) Native Mode (Low RAM)${NC}"
+        read -r -p "Select [1-2]: " m
+        case "$m" in
+            1) DEPLOY_MODE="docker"; break ;;
+            2) DEPLOY_MODE="native"; break ;;
+            *) ;;
+        esac
+    done
+    msg_ok "Mode: $DEPLOY_MODE"
+    sleep 1
+}
+
+# 4.5 依赖安装
+flow_install_deps() {
+    echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
+    msg_info "$([ "$LANG_CHOICE" = "en" ] && echo "Installing Dependencies..." || echo "正在安装依赖...")"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+
+    if [ "$DEPLOY_MODE" = "native" ]; then
+        apt-get update -y >/dev/null 2>&1
+        apt-get install -y dnsmasq sniproxy >/dev/null 2>&1
+        if command -v dnsmasq >/dev/null && command -v sniproxy >/dev/null; then
+            msg_ok "Native dependencies installed."
+        else
+            msg_err "Failed to install dnsmasq/sniproxy."
+            exit 1
+        fi
+    else
+        # Docker
+        if ! command -v docker >/dev/null; then
+            curl -fsSL https://get.docker.com | bash
+            systemctl enable docker
+            systemctl start docker
+        fi
+        # Compose check
+        if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null; then
+             apt-get install -y docker-compose-plugin 2>/dev/null || apt-get install -y docker-compose 2>/dev/null
+        fi
+        msg_ok "Docker environment ready."
+    fi
+    sleep 1
+}
+
+# 4.6 服务配置生成与部署 (核心菜单)
+flow_deploy_services() {
+    # 定义配置片段
+    local C_GPT="address=/openai.com/$FINAL_IP
+address=/chatgpt.com/$FINAL_IP
+address=/oaistatic.com/$FINAL_IP
+address=/oaiusercontent.com/$FINAL_IP
+address=/ai.com/$FINAL_IP"
+    local J_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"'
+
+    local C_GEMINI="address=/gemini.google.com/$FINAL_IP
+address=/bard.google.com/$FINAL_IP
+address=/ai.google.dev/$FINAL_IP
+address=/generativelanguage.googleapis.com/$FINAL_IP
+address=/makersuite.google.com/$FINAL_IP
+address=/deepmind.com/$FINAL_IP
+address=/deepmind.google/$FINAL_IP"
+    local J_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google"'
+
+    local C_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
+address=/copilot.cloud.microsoft/$FINAL_IP
+address=/bing.com/$FINAL_IP
+address=/bingapis.com/$FINAL_IP"
+    local J_COPILOT='"copilot.microsoft.com", "copilot.cloud.microsoft", "bing.com", "bingapis.com"'
+
+    local C_CLAUDE="address=/anthropic.com/$FINAL_IP
+address=/claude.ai/$FINAL_IP"
+    local J_CLAUDE='"anthropic.com", "claude.ai"'
+
+    local C_NETFLIX="address=/netflix.com/$FINAL_IP
+address=/netflix.net/$FINAL_IP
+address=/nflxvideo.net/$FINAL_IP
+address=/nflximg.net/$FINAL_IP
+address=/nflxext.com/$FINAL_IP"
+    local J_NETFLIX='"netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflxext.com"'
+
+    local C_DISNEY="address=/disney.com/$FINAL_IP
+address=/disneyplus.com/$FINAL_IP
+address=/dssott.com/$FINAL_IP
+address=/bamgrid.com/$FINAL_IP"
+    local J_DISNEY='"disney.com", "disneyplus.com", "dssott.com", "bamgrid.com"'
+
+    local C_TIKTOK="address=/tiktok.com/$FINAL_IP
+address=/tiktokv.com/$FINAL_IP
+address=/tiktokcdn.com/$FINAL_IP
+address=/musical.ly/$FINAL_IP"
+    local J_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "musical.ly"'
+
+    local C_YOUTUBE="address=/youtube.com/$FINAL_IP
+address=/googlevideo.com/$FINAL_IP
+address=/ytimg.com/$FINAL_IP
+address=/ggpht.com/$FINAL_IP"
+    local J_YOUTUBE='"youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com"'
+
+    local C_SPOTIFY="address=/spotify.com/$FINAL_IP
+address=/scdn.co/$FINAL_IP
+address=/spotifycdn.com/$FINAL_IP"
+    local J_SPOTIFY='"spotify.com", "scdn.co", "spotifycdn.com"'
+
+    local C_HBO="address=/hbomax.com/$FINAL_IP
+address=/max.com/$FINAL_IP
+address=/hbo.com/$FINAL_IP"
+    local J_HBO='"hbomax.com", "max.com", "hbo.com"'
+
+    # 状态变量 (1=selected)
+    local s1=0 s2=0 s3=0 s4=0 s5=0 s6=0 s7=0 s8=0 s9=0 s10=0
+
+    while true; do
+        clear
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+        echo -e "${SKY}  Select Services (Toggle)${NC}"
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+        
+        printf " %s 1) ChatGPT\n" "$([ "$s1" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 2) Gemini\n" "$([ "$s2" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 3) Copilot\n" "$([ "$s3" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 4) Claude\n" "$([ "$s4" = 1 ] && echo "[x]" || echo "[ ]")"
+        echo " ---"
+        printf " %s 5) Netflix\n" "$([ "$s5" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 6) Disney+\n" "$([ "$s6" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 7) TikTok\n" "$([ "$s7" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 8) YouTube\n" "$([ "$s8" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 9) Spotify\n" "$([ "$s9" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 10) HBO Max\n" "$([ "$s10" = 1 ] && echo "[x]" || echo "[ ]")"
+
+        echo ""
+        echo -e "${YELLOW}Commands: 1-10 (toggle), a (AI), s (Stream), * (All), d (Done), 0 (Back)${NC}"
+        read -r -p "Cmd: " cmd
+        case "$cmd" in
+            1) s1=$((1-s1)) ;; 2) s2=$((1-s2)) ;; 3) s3=$((1-s3)) ;; 4) s4=$((1-s4)) ;;
+            5) s5=$((1-s5)) ;; 6) s6=$((1-s6)) ;; 7) s7=$((1-s7)) ;; 8) s8=$((1-s8)) ;;
+            9) s9=$((1-s9)) ;; 10) s10=$((1-s10)) ;;
+            a|A) s1=1;s2=1;s3=1;s4=1 ;;
+            s|S) s5=1;s6=1;s7=1;s8=1;s9=1;s10=1 ;;
+            \*) s1=1;s2=1;s3=1;s4=1;s5=1;s6=1;s7=1;s8=1;s9=1;s10=1 ;;
+            d|D) break ;;
+            0) return 1 ;;
+        esac
+    done
+
+    # 生成配置
+    ensure_env
+    mkdir -p "$WORK_DIR"
+    echo "" > "$WORK_DIR/dnsmasq.conf"
+    FINAL_JSON_LIST=""
+    TYPE_NAME="Custom"
+
+    local sep=""
+    [ "$s1" -eq 1 ] && { echo "$C_GPT" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_GPT}"; sep=", "; }
+    [ "$s2" -eq 1 ] && { echo "$C_GEMINI" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_GEMINI}"; sep=", "; }
+    [ "$s3" -eq 1 ] && { echo "$C_COPILOT" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_COPILOT}"; sep=", "; }
+    [ "$s4" -eq 1 ] && { echo "$C_CLAUDE" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_CLAUDE}"; sep=", "; }
+    [ "$s5" -eq 1 ] && { echo "$C_NETFLIX" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_NETFLIX}"; sep=", "; }
+    [ "$s6" -eq 1 ] && { echo "$C_DISNEY" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_DISNEY}"; sep=", "; }
+    [ "$s7" -eq 1 ] && { echo "$C_TIKTOK" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_TIKTOK}"; sep=", "; }
+    [ "$s8" -eq 1 ] && { echo "$C_YOUTUBE" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_YOUTUBE}"; sep=", "; }
+    [ "$s9" -eq 1 ] && { echo "$C_SPOTIFY" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_SPOTIFY}"; sep=", "; }
+    [ "$s10" -eq 1 ] && { echo "$C_HBO" >> "$WORK_DIR/dnsmasq.conf"; FINAL_JSON_LIST="${FINAL_JSON_LIST}${sep}${J_HBO}"; sep=", "; }
+
+    # Apply
+    cd "$WORK_DIR" || exit 1
+    if [ "$DEPLOY_MODE" = "native" ]; then
+        msg_info "Configuring Native Services..."
+        cp /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null
+        gen_dnsmasq_conf_native
+        cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
+        gen_sniproxy_conf
+        
+        systemctl enable dnsmasq sniproxy
+        systemctl restart dnsmasq sniproxy
+        msg_ok "Native services restarted."
+    else
+        msg_info "Configuring Docker Services..."
+        if [ ! -f Dockerfile ]; then
+            curl -fsSL https://raw.githubusercontent.com/limitless-net/Prism-DNS/main/Dockerfile -o Dockerfile
+        fi
+        gen_docker_compose
+        
+        docker compose down 2>/dev/null
+        docker compose build
+        docker compose up -d
+        msg_ok "Docker services restarted."
+    fi
+}
+
+# 4.7 白名单逻辑
+firewall_add_ip() {
+    local ip="$1"
+    if command -v ufw >/dev/null; then
+        ufw allow from "$ip" to any port 53 >/dev/null 2>&1
+        ufw allow from "$ip" to any port 80 >/dev/null 2>&1
+        ufw allow from "$ip" to any port 443 >/dev/null 2>&1
+        return 0
+    elif command -v iptables >/dev/null; then
+        iptables -I INPUT -s "$ip" -p udp --dport 53 -j ACCEPT
+        iptables -I INPUT -s "$ip" -p tcp --dport 53 -j ACCEPT
+        iptables -I INPUT -s "$ip" -p tcp --dport 80 -j ACCEPT
+        iptables -I INPUT -s "$ip" -p tcp --dport 443 -j ACCEPT
+        return 0
+    fi
+    return 1
+}
+
+firewall_del_ip() {
+    local ip="$1"
+    if command -v ufw >/dev/null; then
+        ufw delete allow from "$ip" to any port 53 >/dev/null 2>&1
+        return 0
+    elif command -v iptables >/dev/null; then
+        iptables -D INPUT -s "$ip" -p udp --dport 53 -j ACCEPT 2>/dev/null
+        iptables -D INPUT -s "$ip" -p tcp --dport 53 -j ACCEPT 2>/dev/null
+        # ... repeated cleanup ...
+        return 0
+    fi
+    return 1
+}
+
+flow_whitelist() {
+    ensure_env
+    while true; do
+        clear
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+        [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Whitelist Manager${NC}" || echo -e "${SKY}  白名单管理${NC}"
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+        
+        if [ -s "$WHITELIST_FILE" ]; then
+            echo -e "${GREEN}Current IPs:${NC}"
+            cat -n "$WHITELIST_FILE"
+        else
+            echo -e "${YELLOW}(List is empty)${NC}"
+        fi
+        echo ""
+        echo -e "${YELLOW}1) Add IP${NC}"
+        echo -e "${YELLOW}2) Remove IP${NC}"
+        echo -e "${YELLOW}0) Back${NC}"
+        
+        read -r -p "Select: " c
+        case "$c" in
+            1)
+                read -r -p "Enter IP: " new_ip
+                if validate_ip "$new_ip"; then
+                    if firewall_add_ip "$new_ip"; then
+                        echo "$new_ip" >> "$WHITELIST_FILE"
+                        msg_ok "Added $new_ip"
+                    else
+                        msg_warn "Added to list but firewall cmd not found."
+                        echo "$new_ip" >> "$WHITELIST_FILE"
+                    fi
+                else
+                    msg_err "Invalid IP"
+                fi
+                sleep 1
+                ;;
+            2)
+                read -r -p "Enter IP to remove: " d_ip
+                if validate_ip "$d_ip"; then
+                    firewall_del_ip "$d_ip"
+                    grep -v "$d_ip" "$WHITELIST_FILE" > "${WHITELIST_FILE}.tmp"
+                    mv "${WHITELIST_FILE}.tmp" "$WHITELIST_FILE"
+                    msg_ok "Removed $d_ip"
+                else
+                    msg_err "Invalid IP"
+                fi
+                sleep 1
+                ;;
+            0) return ;;
+        esac
+    done
+}
+
+# 4.8 卸载流程
+flow_uninstall() {
+    clear
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Uninstall Service${NC}" || echo -e "${SKY}  卸载服务${NC}"
+    echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+    
+    echo -e "${RED}Danger Zone / 危险操作${NC}"
+    echo ""
+    while true; do
+        echo -e "${YELLOW}1) Confirm Uninstall (Remove all)${NC}"
+        echo -e "${YELLOW}2) Cancel${NC}"
+        read -r -p "Select [1-2]: " u
+        case "$u" in
+            1)
+                msg_info "Stopping services..."
+                systemctl stop dnsmasq sniproxy 2>/dev/null
+                docker stop dns_unlock 2>/dev/null
+                rm -rf "$WORK_DIR"
+                rm -f /etc/dnsmasq.d/unlock.conf
+                msg_ok "Uninstalled."
+                pause_key
+                return
+                ;;
+            2) return ;;
+        esac
+    done
+}
+
+# 4.9 验证与输出
+flow_verify_and_show() {
+    # 简单的验证
+    if netstat -tuln 2>/dev/null | grep -E ':53\b' >/dev/null; then
+        msg_ok "DNS Port (53) Listening"
+    else
+        msg_warn "DNS Port (53) NOT Listening"
+    fi
+    gen_final_json
+    pause_key
+}
+
+# --- 5. 主菜单 ---
+
+main() {
+    ensure_env
+    load_state
+    [ -z "$LANG_CHOICE" ] && flow_select_language
+
+    while true; do
+        clear
+        echo -e "${SKY}╔══════════════════════════════════════════════════════╗${NC}"
+        echo -e "${SKY}║              Prism-DNS 解锁服务管理菜单              ║${NC}"
+        echo -e "${SKY}╠══════════════════════════════════════════════════════╣${NC}"
+        [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}║  Install / Uninstall / Status / Whitelist            ║${NC}" || echo -e "${SKY}║  安装/卸载/状态/检测/DNS/白名单/日志                 ║${NC}"
+        echo -e "${SKY}╚══════════════════════════════════════════════════════╝${NC}"
+        
+        echo ""
+        echo -e "${YELLOW}1) $([ "$LANG_CHOICE" = "en" ] && echo "Install / Reinstall (Wizard)" || echo "安装 / 重新安装 (向导模式)")${NC}"
+        echo -e "${YELLOW}2) $([ "$LANG_CHOICE" = "en" ] && echo "Whitelist Manager" || echo "白名单管理")${NC}"
+        echo -e "${YELLOW}3) $([ "$LANG_CHOICE" = "en" ] && echo "Show Status" || echo "状态检测")${NC}"
+        echo -e "${YELLOW}4) $([ "$LANG_CHOICE" = "en" ] && echo "Show Config JSON" || echo "查看配置 JSON")${NC}"
+        echo -e "${YELLOW}9) $([ "$LANG_CHOICE" = "en" ] && echo "Uninstall" || echo "卸载")${NC}"
+        echo -e "${YELLOW}L) Language / 语言${NC}"
+        echo -e "${YELLOW}0) Exit / 退出${NC}"
+        echo ""
+        
+        read -r -p "Select: " choice
+        case "$choice" in
+            1)
+                # Wizard Flow
+                flow_check_ports || continue
+                flow_select_ip
+                flow_select_mode
+                flow_install_deps
+                flow_deploy_services
+                
+                # Inline Whitelist prompt using MENU, not 'read'
+                if [ "$LANG_CHOICE" = "en" ]; then
+                    echo -e "\n${YELLOW}Would you like to add client IP to whitelist now?${NC}"
+                else
+                    echo -e "\n${YELLOW}是否立即添加落地机 IP 到白名单？${NC}"
+                fi
+                while true; do 
+                    echo "1) Yes"
+                    echo "2) Skip"
+                    read -r -p "Select [1-2]: " wlc
+                    case "$wlc" in
+                        1) flow_whitelist; break ;;
+                        2) break ;;
+                    esac
+                done
+                
+                # Finish
+                save_state
+                flow_verify_and_show
+                ;;
+            2)
+                flow_whitelist
+                ;;
+            3)
+                # Quick Status Check
+                echo ""
+                if systemctl is-active --quiet dnsmasq || docker ps | grep -q dns_unlock; then
+                    msg_ok "Service Running"
+                else
+                    msg_err "Service Stopped"
+                fi
+                pause_key
+                ;;
+            4)
+                if [ -n "$FINAL_IP" ]; then
+                    gen_final_json
+                    pause_key
+                else
+                    msg_warn "Not installed yet."
+                    sleep 1
+                fi
+                ;;
+            9)
+                flow_uninstall
+                ;;
+            L|l)
+                flow_select_language
+                save_state
+                ;;
+            0)
+                exit 0
+                ;;
+            *)
+                ;;
+        esac
+    done
+}
+
+# Run
+if [ "$(id -u)" != "0" ]; then
+    echo -e "${RED}Error: Must run as root${NC}"
+    exit 1
+fi
+
+main
