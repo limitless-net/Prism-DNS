@@ -434,23 +434,32 @@ configure_unlock_services() {
     cat > sniproxy.conf << 'SNICONF'
 user daemon
 pidfile /var/run/sniproxy.pid
+
 error_log {
     filename /dev/stderr
     priority notice
 }
+
+access_log {
+    filename /dev/stdout
+}
+
 listen 80 {
     proto http
     table http_hosts
 }
+
 listen 443 {
     proto tls
     table https_hosts
 }
+
 table http_hosts {
-    .* *
+    .* *:80
 }
+
 table https_hosts {
-    .* *
+    .* *:443
 }
 SNICONF
     
@@ -589,7 +598,8 @@ check_status() {
     # 端口监听状态
     echo -e "  ${CYAN}端口监听状态${NC}"
     for port in 53 80 443; do
-        if ss -tuln 2>/dev/null | grep -qE ":${port}([[:space:]]|$)"; then
+        # 使用更精确的端口匹配，支持 *:80, 0.0.0.0:80, :::80, [::]:80 等格式
+        if ss -tuln 2>/dev/null | grep -qE "(\*|0\.0\.0\.0|\[::\]|::):${port}[[:space:]]"; then
             echo -e "  ├─ 端口 $port:   ${GREEN}● 正常 (监听中)${NC}"
         else
             echo -e "  ├─ 端口 $port:   ${RED}○ 异常 (未监听)${NC}"
@@ -1124,6 +1134,71 @@ restart_service() {
     press_enter
 }
 
+# 9. 查看服务日志
+view_logs() {
+    show_header
+    show_subtitle "📋 查看服务日志"
+    
+    echo -e "  ${CYAN}请选择要查看的日志类型：${NC}"
+    echo ""
+    echo -e "  ${GREEN}1)${NC} 实时日志 ${DIM}(按 Ctrl+C 退出)${NC}"
+    echo -e "  ${GREEN}2)${NC} 最近 50 行日志"
+    echo -e "  ${GREEN}3)${NC} 最近 100 行日志"
+    echo -e "  ${GREEN}4)${NC} DNS 查询日志 ${DIM}(仅显示 DNS 请求)${NC}"
+    echo -e "  ${RED}0)${NC} 返回主菜单"
+    echo ""
+    read -p "  请选择 [0-4]: " log_opt
+    
+    case "$log_opt" in
+        1)
+            echo ""
+            msg_info "显示实时日志，按 Ctrl+C 退出..."
+            echo ""
+            if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
+                docker logs -f dns_unlock 2>&1
+            else
+                journalctl -u dnsmasq -u sniproxy -f 2>&1
+            fi
+            ;;
+        2)
+            echo ""
+            msg_info "最近 50 行日志："
+            echo ""
+            if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
+                docker logs --tail 50 dns_unlock 2>&1
+            else
+                journalctl -u dnsmasq -u sniproxy -n 50 --no-pager 2>&1
+            fi
+            press_enter
+            ;;
+        3)
+            echo ""
+            msg_info "最近 100 行日志："
+            echo ""
+            if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
+                docker logs --tail 100 dns_unlock 2>&1
+            else
+                journalctl -u dnsmasq -u sniproxy -n 100 --no-pager 2>&1
+            fi
+            press_enter
+            ;;
+        4)
+            echo ""
+            msg_info "DNS 查询日志（仅显示解锁域名请求）..."
+            echo ""
+            if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
+                docker logs --tail 100 dns_unlock 2>&1 | grep -E "(query|reply|cached)" || msg_warn "未找到 DNS 查询记录"
+            else
+                journalctl -u dnsmasq -n 100 --no-pager 2>&1 | grep -E "(query|reply|cached)" || msg_warn "未找到 DNS 查询记录"
+            fi
+            press_enter
+            ;;
+        0|*)
+            return
+            ;;
+    esac
+}
+
 # ======================== 主菜单 ========================
 
 main_menu() {
@@ -1134,22 +1209,25 @@ main_menu() {
         detect_install_status
         show_header
         
-        echo -e "  ${CYAN}═══════════════════════════════════════════════${NC}"
-        echo -e "  ${WHITE}${BOLD}主菜单${NC}"
-        echo -e "  ${CYAN}═══════════════════════════════════════════════${NC}"
+        echo -e "  ${CYAN}╔═══════════════════════════════════════════════╗${NC}"
+        echo -e "  ${CYAN}║${NC}              ${WHITE}${BOLD}📋 主菜单${NC}                       ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╠═══════════════════════════════════════════════╣${NC}"
+        echo -e "  ${CYAN}║${NC}                                               ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}1)${NC} 🔧 安装 / 重装解锁服务                   ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}2)${NC} 📊 查看运行状态                         ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}3)${NC} 🛡️  管理 IP 白名单                       ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}4)${NC} 📄 生成 JSON 配置                        ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}5)${NC} 🔍 测试解锁状态                         ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}6)${NC} 📋 查看服务日志                         ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}7)${NC} 🔄 重启服务                             ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${YELLOW}8)${NC} 🧹 一键清理                             ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}                                               ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╠═══════════════════════════════════════════════╣${NC}"
+        echo -e "  ${CYAN}║${NC}  ${RED}9)${NC} 🗑️  卸载解锁服务                         ${CYAN}║${NC}"
+        echo -e "  ${CYAN}║${NC}  ${RED}0)${NC} 🚪 退出                                  ${CYAN}║${NC}"
+        echo -e "  ${CYAN}╚═══════════════════════════════════════════════╝${NC}"
         echo ""
-        echo -e "  ${YELLOW}1)${NC} 安装 / 重装解锁服务 ${DIM}(Docker/原生双模式)${NC}"
-        echo -e "  ${YELLOW}2)${NC} 查看运行状态"
-        echo -e "  ${YELLOW}3)${NC} 管理 IP 白名单 ${DIM}(防火墙安全设置)${NC}"
-        echo -e "  ${YELLOW}4)${NC} 生成 V2bX / Sing-box JSON 配置"
-        echo -e "  ${YELLOW}5)${NC} 测试解锁状态 ${DIM}(连通性/DNS劫持)${NC}"
-        echo -e "  ${YELLOW}6)${NC} 重启服务"
-        echo -e "  ${YELLOW}7)${NC} 一键清理 ${DIM}(停止服务/清理日志)${NC}"
-        echo ""
-        echo -e "  ${RED}8)${NC} 卸载解锁服务"
-        echo -e "  ${RED}0)${NC} 退出"
-        echo ""
-        read -p "  请选择 [0-8]: " choice
+        read -p "  请选择 [0-9]: " choice
         
         case "$choice" in
             1) install_service ;;
@@ -1157,12 +1235,13 @@ main_menu() {
             3) manage_whitelist ;;
             4) generate_json_config ;;
             5) test_unlock ;;
-            6) restart_service ;;
-            7) cleanup_all ;;
-            8) uninstall_service ;;
+            6) view_logs ;;
+            7) restart_service ;;
+            8) cleanup_all ;;
+            9) uninstall_service ;;
             0) 
                 echo ""
-                echo -e "  ${GREEN}感谢使用 Prism-DNS！${NC}"
+                echo -e "  ${GREEN}✨ 感谢使用 Prism-DNS！再见！${NC}"
                 echo ""
                 exit 0
                 ;;
