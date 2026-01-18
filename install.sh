@@ -721,8 +721,8 @@ view_audit() {
     echo -e "2. ${GREEN}下载工具${NC}: Xunlei, Thunder (吸血流量)"
     echo -e "3. ${GREEN}流氓软件${NC}: 360, 2345, 毒霸, 鲁大师 (隐私收集)"
     echo -e "4. ${GREEN}政治敏感${NC}: 轮子网 (Minghui, Epochtimes, NTDTV, ZJ等)"
-    echo -e "5. ${GREEN}垃圾邮件${NC}: SMTP, Spam 端口"
-    echo -e "6. ${GREEN}挖矿行为${NC}: 常见矿池域名 (由 domain_regex 匹配)"
+    echo -e "5. ${GREEN}垃圾邮件${NC}: 临时邮箱域名 (guerrilla, spam4...)"
+    echo -e "6. ${GREEN}挖矿与高危${NC}: 矿池(nicehash/xmrig), QUIC, 360/迅雷, Baidu定位"
     echo -e "----------------------------------------"
     echo -e "${SKY}此规则对普通用户流量限制无影响，仅拦截高危/滥用行为。${NC}"
     read -p "按回车返回..." _
@@ -770,23 +770,21 @@ gen_json() {
     { "tag": "direct", "type": "direct" },
     { "tag": "block", "type": "block" }
   ],
-  "route": {
+  "router": {
     "rules": [
-      { "protocol": "dns", "outbound": "direct" },
+      { "protocol": ["dns"], "outbound": "direct" },
       { "ip_cidr": ["${IP_CIDR}"], "outbound": "direct" },
       { "domain_suffix": [${FINAL_JSON_LIST}], "outbound": "direct" },
       { "ip_is_private": true, "outbound": "block" },
-      { "protocol": "quic", "outbound": "block" },
+      { "protocol": ["quic"], "outbound": "block" },
       {
         "domain_regex": [
-            "(api|ps|sv|offnavi|newvector|ulog.imap|newloc)(.map|).(baidu|n.shifen).com",
-            "(.+.|^)(360|so).(cn|com)",
-            "(Subject|HELO|SMTP)",
-            "(torrent|.torrent|peer_id=|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=)",
-            "(^.@)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168).(info|biz|com|de|net|org|me|la)",
-            "(.?)(xunlei|sandai|Thunder|XLLiveUD)(.)",
-            "(..||)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian).(org|com|net)",
-            "(ed2k|.torrent|peer_id=|announce|info_hash|get_peers|find_node|BitTorrent|announce_peer|announce.php?passkey=|magnet:|xunlei|sandai|Thunder|XLLiveUD|bt_key)"
+            "(api|ps|sv|offnavi|newvector|ulog\\\\.imap|newloc)(\\\\.map|)\\\\.(baidu|n\\\\.shifen)\\\\.com",
+            "(^|\\\\.)(360|so)\\\\.(cn|com)",
+            "(^|\\\\.)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168)\\\\.(info|biz|com|de|net|org)",
+            "(^|\\\\.)(xunlei|sandai|Thunder|XLLiveUD)\\\\.",
+            "(^|\\\\.)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian)\\\\.(org|com|net)",
+            "(torrent|maxmind|geoip|bittorrent|tracker|dht|mining|monero|xmrig|nicehash|ethpool)"
         ],
         "outbound": "block"
       },
