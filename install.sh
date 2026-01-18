@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V23.0 完美最终版)
+#   V2bX 专用解锁服务总控脚本 (V22.3 格式修复版)
 #   
-#   更新日志：
-#   1. [修复] 自动放行本地回环接口 (lo)，修复本机自测超时问题
-#   2. [集成] 包含之前所有的修复 (端口猎杀、白名单管理、容灾DNS)
-#   3. [稳定] 这是最推荐的长期使用版本
+#   修复日志：
+#   1. [UI] 修复白名单列表显示乱码的问题
+#   2. [核心] 自动去除 IP 列表中的隐藏字符(\r)，解决白名单不生效
+#   3. [优化] 强化防火墙规则优先级
 # ==========================================================
 
 RED='\033[0;31m'
@@ -47,6 +47,7 @@ install_base_tools() {
 
 validate_ip() {
     local ip="$1"
+    # 去除首尾空格和换行符
     ip=$(echo "$ip" | tr -d '[:space:]')
     if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
     if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then return 0; fi
@@ -88,15 +89,16 @@ force_cleanup() {
 }
 
 # ==========================================================
-# 防火墙逻辑 (已修复回环问题)
+# 防火墙逻辑 (修复版)
 # ==========================================================
 
 apply_firewall() {
     echo -e "${YELLOW}>>> 正在刷新防火墙规则...${NC}"
     
-    # 格式化白名单
+    # 1. 格式化白名单文件 (去除 Windows 换行符和空格)
     sed -i 's/\r//g' "$WHITELIST_FILE"
     sed -i 's/ //g' "$WHITELIST_FILE"
+    # 删除空行
     sed -i '/^$/d' "$WHITELIST_FILE"
     
     local ips
@@ -115,6 +117,7 @@ apply_firewall() {
                 ufw allow from "$ip" to any port 53 >/dev/null
                 ufw allow from "$ip" to any port 80 >/dev/null
                 ufw allow from "$ip" to any port 443 >/dev/null
+                echo -e "放行: ${GREEN}$ip${NC}"
             fi
         done
         echo "y" | ufw enable >/dev/null
@@ -123,31 +126,30 @@ apply_firewall() {
         # Iptables 逻辑
         iptables -N UNLOCK_FW 2>/dev/null
         iptables -F UNLOCK_FW 
+        # 确保引用在最前面
         while iptables -D INPUT -j UNLOCK_FW 2>/dev/null; do :; done
         iptables -I INPUT -j UNLOCK_FW
         
-        # 1. 【关键修复】放行本地回环接口 (解决本机自测超时)
-        iptables -A UNLOCK_FW -i lo -j ACCEPT
-        iptables -A UNLOCK_FW -s 127.0.0.1 -j ACCEPT
-        
-        # 2. 放行白名单
         for ip in $ips; do
             if validate_ip "$ip"; then
                 iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 53 -j ACCEPT
                 iptables -A UNLOCK_FW -s "$ip" -p udp --dport 53 -j ACCEPT
                 iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 80 -j ACCEPT
                 iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 443 -j ACCEPT
+                echo -e "放行: ${GREEN}$ip${NC}"
             fi
         done
         
-        # 3. 拦截其他
+        iptables -A UNLOCK_FW -s 127.0.0.1 -j ACCEPT
+        
+        # 拦截其他
         iptables -A UNLOCK_FW -p tcp --dport 53 -j DROP
         iptables -A UNLOCK_FW -p udp --dport 53 -j DROP
         iptables -A UNLOCK_FW -p tcp --dport 80 -j DROP
         iptables -A UNLOCK_FW -p tcp --dport 443 -j DROP
         iptables -A UNLOCK_FW -j RETURN
     fi
-    echo -e "${GREEN}防火墙规则已生效！(已自动放行本机回环测试)${NC}"
+    echo -e "${GREEN}防火墙规则已生效！${NC}"
 }
 
 manage_whitelist() {
@@ -157,8 +159,10 @@ manage_whitelist() {
         echo -e "当前规则: 默认拒绝所有，仅允许以下 IP"
         echo -e "----------------------------------------"
         if [ -s "$WHITELIST_FILE" ]; then
+            # 使用循环读取显示，解决 sed 乱码问题
             i=1
             while IFS= read -r line; do
+                # 再次清理显示时的潜在空格
                 clean_line=$(echo "$line" | tr -d '\r' | tr -d ' ')
                 if [ -n "$clean_line" ]; then
                     echo -e "  ${YELLOW}$i)${NC} ${GREEN}$clean_line${NC}"
@@ -182,6 +186,7 @@ manage_whitelist() {
                 read -p ">> " new_ips
                 new_ips=${new_ips//,/ }
                 for ip in $new_ips; do
+                    # 强力净化 IP 字符串
                     ip=$(echo "$ip" | tr -d '[:space:]')
                     if validate_ip "$ip"; then
                         if ! grep -q "^$ip$" "$WHITELIST_FILE"; then
@@ -201,6 +206,7 @@ manage_whitelist() {
                 read -p "请输入要删除的 IP: " del_ip
                 del_ip=$(echo "$del_ip" | tr -d '[:space:]')
                 if [ -n "$del_ip" ]; then 
+                    # 使用临时文件处理删除，更安全
                     grep -v "^$del_ip$" "$WHITELIST_FILE" > "${WHITELIST_FILE}.tmp" && mv "${WHITELIST_FILE}.tmp" "$WHITELIST_FILE"
                     echo -e "${GREEN}已执行删除操作${NC}"
                 fi
@@ -447,11 +453,6 @@ EOF
         docker compose up -d --build --remove-orphans
     fi
 
-    # 安装完成后，自动应用白名单规则（防止裸奔）
-    if [ -s "$WHITELIST_FILE" ]; then
-        apply_firewall
-    fi
-
     save_config
     echo -e "${GREEN}安装完成!${NC}"
     check_status
@@ -561,12 +562,6 @@ uninstall_all() {
     if command -v docker &> /dev/null; then docker rm -f dns_unlock sniproxy_unlock 2>/dev/null; fi
     systemctl stop dnsmasq sniproxy 2>/dev/null
     rm -rf "$WORK_DIR"
-    # 清理防火墙
-    if command -v iptables &> /dev/null; then
-        iptables -D INPUT -j UNLOCK_FW 2>/dev/null
-        iptables -F UNLOCK_FW 2>/dev/null
-        iptables -X UNLOCK_FW 2>/dev/null
-    fi
     echo -e "${GREEN}卸载完成${NC}"
     read -p "按回车返回..." _
 }
@@ -606,7 +601,7 @@ gen_json() {
     "servers": [
       {
         "tag": "unlock_dns",
-        "address": "tcp://${FINAL_IP}",
+        "address": "${FINAL_IP}",
         "address_resolver": "local_dns",
         "detour": "direct"
       },
@@ -620,15 +615,14 @@ gen_json() {
       {
         "domain_suffix": [${FINAL_JSON_LIST}],
         "server": "unlock_dns",
-        "disable_cache": true,
-        "query_type": ["A"]
+        "disable_cache": true
       }
     ],
     "final": "local_dns",
     "strategy": "prefer_ipv4"
   },
   "outbounds": [
-    { "tag": "direct", "type": "direct", "domain_strategy": "prefer_ipv4" },
+    { "tag": "direct", "type": "direct" },
     { "tag": "block", "type": "block" }
   ],
   "route": {
@@ -668,7 +662,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V23.0 完美最终版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.3 格式修复版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
