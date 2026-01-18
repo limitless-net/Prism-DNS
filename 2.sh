@@ -267,9 +267,18 @@ install_docker_mode() {
     
     if ! command -v docker &> /dev/null; then
         msg_warn "Docker 未安装，正在安装..."
-        (curl -fsSL https://get.docker.com | bash > "$LOG_FILE" 2>&1) &
-        spinner $! "下载并安装 Docker..."
-        wait $!
+        # 下载脚本并安装，添加错误处理
+        local docker_script="/tmp/get-docker.sh"
+        if curl -fsSL https://get.docker.com -o "$docker_script" 2>/dev/null; then
+            chmod +x "$docker_script"
+            (bash "$docker_script" > "$LOG_FILE" 2>&1) &
+            spinner $! "下载并安装 Docker..."
+            wait $!
+            rm -f "$docker_script"
+        else
+            msg_err "无法下载 Docker 安装脚本，请检查网络连接"
+            return 1
+        fi
         
         if ! command -v docker &> /dev/null; then
             msg_err "Docker 安装失败，请检查 $LOG_FILE"
@@ -701,13 +710,21 @@ apply_firewall_rules() {
     
     local ips=$(cat "$WHITELIST_FILE" 2>/dev/null | sort | uniq)
     
-    # ⚠️ 防火墙自锁保护：强制放行 SSH
-    msg_warn "防火墙自锁保护：强制放行 SSH (22端口)"
+    # ⚠️ 防火墙自锁保护：检测并放行 SSH
+    # 从 sshd 配置中检测实际 SSH 端口
+    local ssh_port=22
+    if [ -f /etc/ssh/sshd_config ]; then
+        local detected_port=$(grep -E "^[[:space:]]*Port[[:space:]]+" /etc/ssh/sshd_config 2>/dev/null | awk '{print $2}' | head -1)
+        if [ -n "$detected_port" ] && [ "$detected_port" -gt 0 ] 2>/dev/null; then
+            ssh_port=$detected_port
+        fi
+    fi
+    msg_warn "防火墙自锁保护：强制放行 SSH (端口 $ssh_port)"
     
     if command -v ufw &> /dev/null; then
         # UFW 模式
         ufw allow ssh >/dev/null 2>&1
-        ufw allow 22/tcp >/dev/null 2>&1
+        ufw allow "$ssh_port/tcp" >/dev/null 2>&1
         echo "y" | ufw enable >/dev/null 2>&1
         
         # 清理旧规则
@@ -732,8 +749,8 @@ apply_firewall_rules() {
         fi
     else
         # iptables 模式
-        # 首先确保 SSH 放行
-        iptables -C INPUT -p tcp --dport 22 -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport 22 -j ACCEPT
+        # 首先确保 SSH 放行 (使用检测到的端口)
+        iptables -C INPUT -p tcp --dport "$ssh_port" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$ssh_port" -j ACCEPT
         
         # 清理旧的 UNLOCK 链
         iptables -D INPUT -j UNLOCK_WHITELIST 2>/dev/null || true
@@ -867,10 +884,25 @@ test_unlock() {
         echo -e "${YELLOW}✗ 失败 (可能禁用 ICMP)${NC}"
     fi
     
-    # TCP 端口测试
+    # TCP 端口测试 (使用 nc 或 /dev/tcp 作为后备)
     for port in 53 80 443; do
         echo -n "  ├─ TCP $port 测试:  "
-        if timeout 2 bash -c "echo >/dev/tcp/$SERVER_IP/$port" 2>/dev/null; then
+        local port_open=false
+        # 优先使用 nc (netcat) 进行测试
+        if command -v nc &> /dev/null; then
+            if nc -z -w 2 "$SERVER_IP" "$port" 2>/dev/null; then
+                port_open=true
+            fi
+        elif command -v timeout &> /dev/null; then
+            # 使用 bash 内置 /dev/tcp (需要先验证 IP)
+            if validate_ip "$SERVER_IP"; then
+                if timeout 2 bash -c "echo >/dev/tcp/$SERVER_IP/$port" 2>/dev/null; then
+                    port_open=true
+                fi
+            fi
+        fi
+        
+        if [ "$port_open" = true ]; then
             echo -e "${GREEN}✓ 开放${NC}"
         else
             echo -e "${RED}✗ 关闭${NC}"
@@ -935,13 +967,18 @@ uninstall_service() {
     if command -v docker &> /dev/null; then
         if docker ps -a 2>/dev/null | grep -q "dns_unlock"; then
             msg_info "停止并删除 Docker 容器..."
-            docker stop dns_unlock 2>/dev/null
-            docker rm dns_unlock 2>/dev/null
-            msg_ok "Docker 容器已删除"
+            if docker stop dns_unlock >/dev/null 2>&1 && docker rm dns_unlock >/dev/null 2>&1; then
+                msg_ok "Docker 容器已删除"
+            else
+                msg_warn "Docker 容器删除可能不完整"
+            fi
         fi
         if docker images 2>/dev/null | grep -q "prism-dns"; then
-            docker rmi prism-dns:alpine 2>/dev/null
-            msg_ok "Docker 镜像已删除"
+            if docker rmi prism-dns:alpine >/dev/null 2>&1; then
+                msg_ok "Docker 镜像已删除"
+            else
+                msg_warn "Docker 镜像删除失败 (可能正在使用)"
+            fi
         fi
     fi
     
@@ -1035,12 +1072,16 @@ restart_service() {
     
     if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
         msg_info "重启 Docker 容器..."
-        cd "$WORK_DIR" 2>/dev/null && docker compose restart
-        sleep 2
-        if docker ps | grep -q "dns_unlock"; then
-            msg_ok "Docker 容器重启成功"
+        if [ -d "$WORK_DIR" ]; then
+            cd "$WORK_DIR" && docker compose restart
+            sleep 2
+            if docker ps | grep -q "dns_unlock"; then
+                msg_ok "Docker 容器重启成功"
+            else
+                msg_err "Docker 容器重启失败"
+            fi
         else
-            msg_err "Docker 容器重启失败"
+            msg_err "工作目录不存在: $WORK_DIR"
         fi
     else
         msg_info "重启原生服务..."
