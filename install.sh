@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V23.5 安全加固版)
+#   V2bX 专用解锁服务总控脚本 (V22.5 安全加固版)
 #   
 #   修复日志 (V22.5):
 #   1. [安全] 修复 IPv6 绕过漏洞 (导致白名单对 IPv6 来源不生效)
@@ -770,25 +770,26 @@ gen_json() {
     { "tag": "direct", "type": "direct" },
     { "tag": "block", "type": "block" }
   ],
-  "router": {
+  "route": {
     "rules": [
-      { "protocol": ["dns"], "outbound": "direct" },
+      { "protocol": "dns", "outbound": "direct" },
       { "ip_cidr": ["${IP_CIDR}"], "outbound": "direct" },
       { "domain_suffix": [${FINAL_JSON_LIST}], "outbound": "direct" },
       { "ip_is_private": true, "outbound": "block" },
-      { "protocol": ["quic"], "outbound": "block" },
+      { "protocol": "quic", "outbound": "block" },
       {
         "domain_regex": [
-            "(api|ps|sv|offnavi|newvector|ulog\\\\.imap|newloc)(\\\\.map|)\\\\.(baidu|n\\\\.shifen)\\\\.com",
-            "(^|\\\\.)(360|so)\\\\.(cn|com)",
-            "(^|\\\\.)(guerrillamail|guerrillamailblock|sharklasers|grr|pokemail|spam4|bccto|chacuo|027168)\\\\.(info|biz|com|de|net|org)",
-            "(^|\\\\.)(xunlei|sandai|Thunder|XLLiveUD)\\\\.",
-            "(^|\\\\.)(dafahao|mingjinglive|botanwang|minghui|dongtaiwang|falunaz|epochtimes|ntdtv|falundafa|falungong|wujieliulan|zhengjian)\\\\.(org|com|net)",
-            "(torrent|maxmind|geoip|bittorrent|tracker|dht|mining|monero|xmrig|nicehash|ethpool)"
+            ".*\\\\.(360|so)\\\\.(cn|com)$",
+            ".*(baidu|shifen).*\\\\.(map|api|ps|sv)",
+            ".*(guerrillamail|spam4|pokemail|bccto|chacuo)",
+            ".*(xunlei|sandai|Thunder)",
+            ".*(minghui|epochtimes|ntdtv|falun|dongtaiwang|botanwang|wujieliulan)",
+            ".*(torrent|tracker|bittorrent)",
+            ".*(xmrig|nicehash|ethpool|monero|mining)"
         ],
         "outbound": "block"
       },
-      { "outbound": "direct", "network": ["udp","tcp"] }
+      { "outbound": "direct" }
     ],
     "auto_detect_interface": false
   }
