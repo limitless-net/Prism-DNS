@@ -1,10 +1,10 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V22.2 UI修复版)
+#   V2bX 专用解锁服务总控脚本 (V22.3 UI 完美修复版)
 #   
 #   修复日志：
-#   1. [UI] 统一菜单颜色为黄色，解决蓝色在部分终端看不清的问题
-#   2. [核心] 保持 V22.1 的所有功能 (白名单管理、容灾、审计、监控)
+#   1. [UI] 修复白名单列表显示乱码 (ANSI 颜色代码解析错误) 的问题
+#   2. [核心] 保持 V22.2 的所有功能
 # ==========================================================
 
 RED='\033[0;31m'
@@ -136,7 +136,12 @@ manage_whitelist() {
         echo -e "当前规则: 默认拒绝所有，仅允许以下 IP"
         echo -e "----------------------------------------"
         if [ -s "$WHITELIST_FILE" ]; then
-            cat -n "$WHITELIST_FILE" | sed "s/^/  ${GREEN}/;s/$/${NC}/"
+            # 修复乱码 Bug：用 while 循环代替 sed 处理颜色
+            local count=1
+            while IFS= read -r line; do
+                echo -e "  ${GREEN}$count)  $line${NC}"
+                ((count++))
+            done < "$WHITELIST_FILE"
         else
             echo -e "  ${RED}(空) - 当前任何人无法连接，请添加 IP！${NC}"
         fi
@@ -414,7 +419,6 @@ EOF
     check_status
 }
 
-# 1. 修改解锁规则 (热更新)
 modify_services() {
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     echo -e "${SKY}>>> 修改解锁规则 (无需重装)${NC}"
@@ -434,7 +438,6 @@ modify_services() {
     if [[ "$view_json" == "y" ]]; then gen_json; fi
 }
 
-# 2. 重启服务
 restart_services() {
     echo -e "${SKY}>>> 正在重启服务...${NC}"
     if [ "$DEPLOY_MODE" == "native" ]; then
@@ -454,7 +457,6 @@ restart_services() {
     read -p "按回车返回..." _
 }
 
-# 3. 实时流量监控
 monitor_traffic() {
     if [ -z "$DEPLOY_MODE" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     clear
@@ -621,7 +623,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.2 UI修复版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.3 UI修复版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
