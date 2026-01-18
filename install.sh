@@ -42,7 +42,7 @@ show_header() {
     detect_install_status
     detect_public_ip
     
-    [ "$LANG_CHOICE" = "en" ] && status_text="$INSTALLED_STATUS" || status_text="$INSTALLED_STATUS"
+    status_text="$INSTALLED_STATUS"
     [ -n "$DEPLOY_MODE" ] && mode_text="$DEPLOY_MODE" || { [ "$LANG_CHOICE" = "en" ] && mode_text="Not Installed" || mode_text="未安装"; }
     [ -n "$SERVER_IP" ] && ip_text="$SERVER_IP" || { [ "$LANG_CHOICE" = "en" ] && ip_text="Not Detected" || ip_text="未检测"; }
     
@@ -894,7 +894,7 @@ txt() {
 spinner() {
     local pid=$1
     local msg=$2
-    local spin='-\|/'
+    local spin='|/-\'
     local i=0
     
     while kill -0 $pid 2>/dev/null; do
@@ -914,8 +914,8 @@ kill_port_process() {
     if command -v lsof &> /dev/null; then
         pids=$(lsof -t -i :"$port" 2>/dev/null)
     elif command -v ss &> /dev/null; then
-        # Extract PID from ss output
-        pids=$(ss -tlnp 2>/dev/null | grep ":$port" | grep -oP 'pid=\K[0-9]+' | sort -u)
+        # Extract PID from ss output using portable sed
+        pids=$(ss -tlnp 2>/dev/null | grep ":$port" | sed -n 's/.*pid=\([0-9]*\).*/\1/p' | sort -u)
     elif command -v fuser &> /dev/null; then
         pids=$(fuser "$port/tcp" 2>/dev/null | tr -s ' ')
     fi
@@ -1526,9 +1526,12 @@ address=/hbo.com/$FINAL_IP"
     TYPE_NAME=""
     local selected_count=0
     
+    # Save SERVICE_CHOICE to global SERVICES for config persistence
+    SERVICES="$SERVICE_CHOICE"
+    
     # Parse selections / 解析选择
-    IFS=',' read -ra SERVICES <<< "$SERVICE_CHOICE"
-    for service in "${SERVICES[@]}"; do
+    IFS=',' read -ra SERVICE_ARRAY <<< "$SERVICE_CHOICE"
+    for service in "${SERVICE_ARRAY[@]}"; do
         # Trim whitespace / 去除空白
         service=$(echo "$service" | tr -d '[:space:]')
         
