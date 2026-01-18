@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V15.0 救砖版)
+#   V2bX 专用解锁服务总控脚本 (V16.0 进程猎杀版)
 #   
 #   修复日志：
-#   1. [网络] 放弃 ghcr.io，改用 Debian 基础镜像本地构建
-#   2. [功能] Debian 版 Sniproxy 自带 UDNS，解决崩溃问题
-#   3. [增强] 新增 "配置 Docker 国内加速源" 功能
+#   1. [关键] 增加 lsof/netstat 进程猎杀，解决 "Address already in use"
+#   2. [关键] 暴力解除 systemd-resolved 对 53 端口的锁定
+#   3. [优化] 状态检查现在会显示占用端口的具体进程名
 # ==========================================================
 
 RED='\033[0;31m'
@@ -38,50 +38,53 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 暴力释放端口
+# 🛠️ 暴力释放端口 (猎杀模式)
+kill_port_user() {
+    local port=$1
+    # 查找占用端口的 PID
+    pids=$(lsof -t -i:$port 2>/dev/null)
+    if [ -n "$pids" ]; then
+        echo -e "${YELLOW}发现端口 $port 被进程占用 (PID: $pids)，正在清理...${NC}"
+        kill -9 $pids 2>/dev/null
+    fi
+}
+
 force_cleanup() {
-    echo -e "${YELLOW}>>> 正在执行强制清理...${NC}"
-    systemctl stop systemd-resolved 2>/dev/null
-    systemctl disable systemd-resolved 2>/dev/null
-    systemctl stop dnsmasq 2>/dev/null
-    systemctl stop sniproxy 2>/dev/null
+    echo -e "${YELLOW}>>> 正在执行环境清理与端口释放...${NC}"
     
-    fuser -k 53/tcp 2>/dev/null
-    fuser -k 53/udp 2>/dev/null
-    fuser -k 80/tcp 2>/dev/null
-    fuser -k 443/tcp 2>/dev/null
-    
+    # 1. 停止 Docker 容器
     if command -v docker &> /dev/null; then
         docker rm -f dns_unlock 2>/dev/null
         cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
     fi
-    
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo -e "${GREEN}清理完毕${NC}"
-}
 
-# Docker 换源功能
-fix_docker_mirror() {
-    echo -e "${SKY}正在配置 Docker 国内加速源...${NC}"
-    mkdir -p /etc/docker
-    cat > /etc/docker/daemon.json <<EOF
-{
-  "registry-mirrors": [
-    "https://docker.m.daocloud.io",
-    "https://huecker.io",
-    "https://dockerhub.timeweb.cloud",
-    "https://noohub.ru"
-  ]
-}
-EOF
-    systemctl daemon-reload
-    systemctl restart docker
-    echo -e "${GREEN}Docker 源已更新，请重新尝试安装！${NC}"
-    read -p "按回车返回..." _
+    # 2. 停止常见 Web 服务
+    systemctl stop nginx 2>/dev/null
+    systemctl disable nginx 2>/dev/null
+    systemctl stop apache2 2>/dev/null
+    systemctl disable apache2 2>/dev/null
+    systemctl stop caddy 2>/dev/null
+    
+    # 3. 彻底杀死 systemd-resolved (53端口元凶)
+    systemctl stop systemd-resolved 2>/dev/null
+    systemctl disable systemd-resolved 2>/dev/null
+    
+    # 4. 暴力猎杀端口占用进程
+    kill_port_user 53
+    kill_port_user 80
+    kill_port_user 443
+    
+    # 5. 重建 resolv.conf (防止 systemd-resolved 复活)
+    rm -f /etc/resolv.conf
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    # 锁定文件防止被修改 (可选，暂时不锁以免影响其他)
+    # chattr +i /etc/resolv.conf 2>/dev/null
+
+    echo -e "${GREEN}端口清理完毕${NC}"
 }
 
 # ==========================================================
-# 核心逻辑 (保持不变)
+# 核心逻辑
 # ==========================================================
 
 define_rules() {
@@ -212,6 +215,10 @@ select_services_logic() {
 
 run_install() {
     check_root
+    
+    # 安装必要工具 (用于猎杀进程)
+    if ! command -v lsof &> /dev/null; then apt-get update && apt-get install -y lsof; fi
+    
     force_cleanup
     
     # IP 选择
@@ -231,7 +238,7 @@ run_install() {
 
     echo -e "\n${SKY}部署模式:${NC}"
     echo "1. Docker 模式 (Debian构建，兼容性好)"
-    echo "2. 原生模式 (推荐! 不受Docker网络限制)"
+    echo "2. 原生模式 (推荐! 彻底避免网络冲突)"
     read -p "选择 [1-2] (默认1): " MODE_OPT
     if [ "$MODE_OPT" == "2" ]; then DEPLOY_MODE="native"; else DEPLOY_MODE="docker"; fi
 
@@ -242,8 +249,8 @@ run_install() {
         echo -e "${YELLOW}>>> 正在安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
         
-        systemctl stop systemd-resolved 2>/dev/null
-        systemctl disable systemd-resolved 2>/dev/null
+        # 二次清理，确保 apt install 后没有自动启动占用
+        systemctl stop dnsmasq sniproxy 2>/dev/null
         
         cat > /etc/dnsmasq.conf <<EOF
 port=53
@@ -280,8 +287,7 @@ EOF
         
         cd "$WORK_DIR"
         
-        # 使用 Debian 作为底包，apt 安装的 sniproxy 支持 UDNS
-        # 且 debian 镜像比 ghcr 的镜像更容易拉取
+        # 使用 Debian 构建，规避 ghcr 拉取失败和 sniproxy 功能缺失问题
         cat > Dockerfile <<EOF
 FROM debian:bullseye-slim
 RUN apt-get update && \
@@ -302,7 +308,6 @@ RUN echo 'port=53' > /etc/dnsmasq.conf && \\
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
 
-        # 包含 resolver 的 sniproxy 配置
         cat > sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
@@ -379,12 +384,19 @@ check_status() {
     echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
     echo -e "模式: ${YELLOW}${DEPLOY_MODE:-未知}${NC}"
     
-    echo -e "\n端口监听状态 (53/80/443):"
+    echo -e "\n端口占用详情 (最重要!!!):"
     for p in 53 80 443; do
-        if ss -tuln | grep -q ":$p "; then 
-            echo -e "端口 $p: ${GREEN}正常 (监听中)${NC}"
-        else 
-            echo -e "端口 $p: ${RED}异常 (未监听)${NC}"
+        # 获取占用端口的进程名
+        proc=$(lsof -i :$p -t | xargs ps -p 2>/dev/null | grep -v PID | awk '{print $4}' | head -n1)
+        
+        if [ -n "$proc" ]; then
+            if [[ "$proc" == "dnsmasq" || "$proc" == "sniproxy" || "$proc" == "docker-proxy" ]]; then
+                echo -e "端口 $p: ${GREEN}正常 (进程: $proc)${NC}"
+            else
+                echo -e "端口 $p: ${RED}被抢占! (进程: $proc) -> 请卸载该软件或使用原生模式${NC}"
+            fi
+        else
+            echo -e "端口 $p: ${RED}未监听 (服务未启动)${NC}"
         fi
     done
     
@@ -417,6 +429,12 @@ uninstall_all() {
     echo -e "${RED}正在卸载...${NC}"
     if command -v docker &> /dev/null; then docker rm -f dns_unlock 2>/dev/null; fi
     systemctl stop dnsmasq sniproxy 2>/dev/null
+    
+    # 尝试恢复
+    rm -f /etc/resolv.conf
+    echo "nameserver 8.8.8.8" > /etc/resolv.conf
+    # systemctl start systemd-resolved 2>/dev/null 
+    
     rm -rf "$WORK_DIR"
     echo -e "${GREEN}卸载完成${NC}"
     read -p "按回车返回..." _
@@ -425,7 +443,6 @@ uninstall_all() {
 gen_json() {
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
     
-    # 构造 IP CIDR
     if [[ "$FINAL_IP" == *":"* ]]; then IP_CIDR="${FINAL_IP}/128"; else IP_CIDR="${FINAL_IP}/32"; fi
 
     clear
@@ -547,7 +564,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V15.0 救砖版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V16.0 进程猎杀版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
@@ -555,9 +572,8 @@ while true; do
     echo -e "${YELLOW}1) 安装 / 重装解锁服务 (Docker/原生)${NC}"
     echo -e "${YELLOW}2) 设置白名单 IP (防火墙)${NC}"
     echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置 (含审计)${NC}"
-    echo -e "${YELLOW}4) 查看运行状态${NC}"
+    echo -e "${YELLOW}4) 查看运行状态 (含占用检测)${NC}"
     echo -e "${YELLOW}5) 查看错误日志${NC}"
-    echo -e "${BLUE}7) 配置 Docker 国内加速源 (如果安装卡住请选此项)${NC}"
     echo -e "${RED}6) 卸载服务${NC}"
     echo -e "${RED}0) 退出${NC}"
     echo ""
@@ -570,7 +586,6 @@ while true; do
         4) check_status ;;
         5) view_logs ;;
         6) uninstall_all ;;
-        7) fix_docker_mirror ;;
         0) exit 0 ;;
         *) ;;
     esac
