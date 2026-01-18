@@ -872,9 +872,21 @@ test_unlock() {
     show_header
     show_subtitle "🔍 测试解锁状态"
     
+    # 预先验证 IP 格式
+    local ip_valid=false
+    if validate_ip "$SERVER_IP"; then
+        ip_valid=true
+    fi
+    
     # 测试连通性
     echo -e "  ${CYAN}[1/3] 测试解锁机连通性${NC}"
     echo ""
+    
+    if [ "$ip_valid" = false ]; then
+        msg_err "无效的服务器 IP: $SERVER_IP"
+        press_enter
+        return
+    fi
     
     # Ping 测试
     echo -n "  ├─ Ping 测试:    "
@@ -894,11 +906,9 @@ test_unlock() {
                 port_open=true
             fi
         elif command -v timeout &> /dev/null; then
-            # 使用 bash 内置 /dev/tcp (需要先验证 IP)
-            if validate_ip "$SERVER_IP"; then
-                if timeout 2 bash -c "echo >/dev/tcp/$SERVER_IP/$port" 2>/dev/null; then
-                    port_open=true
-                fi
+            # 使用 bash 内置 /dev/tcp (IP 已经在函数开始时验证过)
+            if timeout 2 bash -c "echo >/dev/tcp/$SERVER_IP/$port" 2>/dev/null; then
+                port_open=true
             fi
         fi
         
@@ -967,10 +977,23 @@ uninstall_service() {
     if command -v docker &> /dev/null; then
         if docker ps -a 2>/dev/null | grep -q "dns_unlock"; then
             msg_info "停止并删除 Docker 容器..."
-            if docker stop dns_unlock >/dev/null 2>&1 && docker rm dns_unlock >/dev/null 2>&1; then
+            local stop_ok=true
+            local rm_ok=true
+            
+            if ! docker stop dns_unlock >/dev/null 2>&1; then
+                stop_ok=false
+            fi
+            
+            if ! docker rm dns_unlock >/dev/null 2>&1; then
+                rm_ok=false
+            fi
+            
+            if [ "$stop_ok" = true ] && [ "$rm_ok" = true ]; then
                 msg_ok "Docker 容器已删除"
+            elif [ "$stop_ok" = false ]; then
+                msg_warn "Docker 容器停止失败"
             else
-                msg_warn "Docker 容器删除可能不完整"
+                msg_warn "Docker 容器删除失败"
             fi
         fi
         if docker images 2>/dev/null | grep -q "prism-dns"; then
@@ -1073,12 +1096,16 @@ restart_service() {
     if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
         msg_info "重启 Docker 容器..."
         if [ -d "$WORK_DIR" ]; then
-            cd "$WORK_DIR" && docker compose restart
-            sleep 2
-            if docker ps | grep -q "dns_unlock"; then
-                msg_ok "Docker 容器重启成功"
+            if cd "$WORK_DIR"; then
+                docker compose restart
+                sleep 2
+                if docker ps | grep -q "dns_unlock"; then
+                    msg_ok "Docker 容器重启成功"
+                else
+                    msg_err "Docker 容器重启失败"
+                fi
             else
-                msg_err "Docker 容器重启失败"
+                msg_err "无法进入工作目录: $WORK_DIR"
             fi
         else
             msg_err "工作目录不存在: $WORK_DIR"
