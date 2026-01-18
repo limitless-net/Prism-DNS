@@ -20,7 +20,7 @@ BLUE='\033[0;34m'
 PURPLE='\033[0;35m'
 NC='\033[0m'
 
-MODE=""                 # prism/sniproxy 或 singbox
+MODE=""                 # prism / singbox
 FIREWALL_BACKEND=""     # ufw / firewalld / iptables
 SERVER_IP=""            # 本机对外 IP
 ALLOWED_IPS=()          # 白名单节点 IP 列表
@@ -41,7 +41,6 @@ DOMAINS=()
 # ==========================================================
 
 detect_public_ip() {
-    # 尽量多源获取公网 IP
     for url in "https://ipinfo.io/ip" "https://ifconfig.me" "https://api.ip.sb/ip"; do
         SERVER_IP=$(curl -4 -s --max-time 5 "$url")
         if [[ -n "$SERVER_IP" ]]; then
@@ -138,7 +137,6 @@ detect_firewall_backend() {
 }
 
 apply_firewall_rules() {
-    # 只允许 ALLOWED_IPS 访问 53/80/443，其余全部拒绝
     if [ ${#ALLOWED_IPS[@]} -eq 0 ]; then
         echo -e "${YELLOW}未设置白名单节点 IP，暂不限制访问（不安全）。${NC}"
         return
@@ -149,7 +147,6 @@ apply_firewall_rules() {
 
     case "$FIREWALL_BACKEND" in
         ufw)
-            echo -e "${YELLOW}使用 ufw 管理防火墙规则...${NC}"
             sudo ufw enable >/dev/null 2>&1 || true
             for ip in "${ALLOWED_IPS[@]}"; do
                 sudo ufw allow from "$ip" to any port 53 proto tcp >/dev/null 2>&1
@@ -162,7 +159,6 @@ apply_firewall_rules() {
             sudo ufw deny 443 >/dev/null 2>&1 || true
             ;;
         firewalld)
-            echo -e "${YELLOW}使用 firewalld 管理防火墙规则...${NC}"
             sudo systemctl start firewalld >/dev/null 2>&1 || true
             for ip in "${ALLOWED_IPS[@]}"; do
                 sudo firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${ip} port protocol=tcp port=53 accept" >/dev/null 2>&1
@@ -177,8 +173,6 @@ apply_firewall_rules() {
             sudo firewall-cmd --reload >/dev/null 2>&1
             ;;
         iptables|*)
-            echo -e "${YELLOW}使用 iptables 管理防火墙规则...${NC}"
-            # 先清理旧规则（简单粗暴：打上自定义链）
             iptables -N UNLOCK_SRV 2>/dev/null || iptables -F UNLOCK_SRV
             iptables -D INPUT -j UNLOCK_SRV 2>/dev/null || true
             iptables -A INPUT -j UNLOCK_SRV
@@ -201,13 +195,12 @@ apply_firewall_rules() {
 clear_firewall_rules() {
     case "$FIREWALL_BACKEND" in
         ufw)
-            echo -e "${YELLOW}清理 ufw 相关规则（需要你自己确认 ufw 状态）${NC}"
+            echo -e "${YELLOW}请自行检查 ufw 规则（脚本不强制清空）。${NC}"
             ;;
         firewalld)
-            echo -e "${YELLOW}清理 firewalld 相关规则（建议手动检查）${NC}"
+            echo -e "${YELLOW}请自行检查 firewalld rich rules（脚本不强制清空）。${NC}"
             ;;
         iptables|*)
-            echo -e "${YELLOW}清理 iptables UNLOCK_SRV 链${NC}"
             iptables -D INPUT -j UNLOCK_SRV 2>/dev/null || true
             iptables -F UNLOCK_SRV 2>/dev/null || true
             iptables -X UNLOCK_SRV 2>/dev/null || true
@@ -269,19 +262,18 @@ check_ports_53_80_443() {
 }
 
 # ==========================================================
-# 解锁模式安装（这里只给出结构，你可以按自己习惯填充具体实现）
-# 为了不污染系统，这里默认用 docker 方式部署，原生你可以再细化
+# 解锁模式安装
 # ==========================================================
 
 install_prism_sniproxy_mode() {
     MODE="prism"
     clear
-    echo -e "${SKY}安装 Prism-DNS + sniproxy 解锁模式（示例用 docker，你可按需改原生）${NC}"
+    echo -e "${SKY}安装 Prism-DNS + sniproxy 解锁模式（Docker 版）${NC}"
 
     check_ports_53_80_443 || return
 
     if ! command -v docker >/dev/null 2>&1; then
-        echo -e "${YELLOW}未检测到 docker，尝试安装...${NC}"
+        echo -e "${YELLOW}未检测到 docker，正在安装...${NC}"
         if command -v apt >/dev/null 2>&1; then
             sudo apt update && sudo apt install -y docker.io
         elif command -v yum >/dev/null 2>&1; then
@@ -290,16 +282,34 @@ install_prism_sniproxy_mode() {
         sudo systemctl enable docker --now
     fi
 
-    echo -e "${YELLOW}此处请替换为你实际使用的 Prism-DNS/sniproxy 镜像和参数${NC}"
-    echo -e "${YELLOW}示例：docker run -d --name prism-dns -p 53:53/udp your/prism-image${NC}"
-    echo -e "${YELLOW}示例：docker run -d --name sniproxy -p 80:80 -p 443:443 your/sniproxy-image${NC}"
+    echo -e "${YELLOW}正在部署 Prism-DNS 和 sniproxy ...${NC}"
 
-    # 这里先用 echo 占位，避免误导你真实环境
-    # 你可以把下面两行替换成你自己的 docker run 命令
-    echo "docker run -d --name prism-dns -p 53:53/udp prism-dns-image"
-    echo "docker run -d --name sniproxy -p 80:80 -p 443:443 sniproxy-image"
+    docker rm -f prism-dns sniproxy >/dev/null 2>&1 || true
 
-    echo -e "${GREEN}Prism-DNS + sniproxy 模式已标记为安装（请按你实际环境补全 docker 命令）。${NC}"
+    docker run -d \
+      --name prism-dns \
+      --restart=always \
+      -p 53:53/udp \
+      -p 53:53/tcp \
+      ghcr.io/zhxie/prismdns:latest
+
+    docker run -d \
+      --name sniproxy \
+      --restart=always \
+      -p 80:80 \
+      -p 443:443 \
+      ghcr.io/dlundquist/sniproxy:latest
+
+    echo -e "${GREEN}✓ Prism-DNS + sniproxy 已成功安装并运行${NC}"
+
+    if [ ${#ALLOWED_IPS[@]} -gt 0 ]; then
+        echo -e "${YELLOW}正在应用防火墙白名单规则...${NC}"
+        apply_firewall_rules
+    else
+        echo -e "${YELLOW}未设置白名单，当前所有 IP 均可访问解锁服务（不安全）${NC}"
+    fi
+
+    echo -e "${GREEN}安装完成！本机已成为解锁服务器。${NC}"
     read -p "按回车返回菜单..." _
 }
 
@@ -326,10 +336,9 @@ uninstall_all() {
     read -p "确认卸载？[y/N] " c
     [[ "$c" =~ ^[Yy]$ ]] || return
 
-    # 停止 docker 容器（示例）
     docker rm -f prism-dns sniproxy >/dev/null 2>&1 || true
 
-    # 停止 sing-box（如果你用 systemd，可以在这里加 systemctl stop）
+    # 如你有 sing-box systemd 服务，可在此停止
     # systemctl stop sing-box-unlock.service 2>/dev/null || true
     # systemctl disable sing-box-unlock.service 2>/dev/null || true
 
@@ -341,7 +350,7 @@ uninstall_all() {
 }
 
 # ==========================================================
-# 解锁服务选择 & 节点 JSON 生成（核心：谁运行谁就是解锁机）
+# 解锁服务选择 & 节点 JSON 生成
 # ==========================================================
 
 reset_services() {
@@ -494,10 +503,6 @@ generate_node_singbox_json() {
 
     cat <<EOF
 {
-  "log": {
-    "level": "info",
-    "timestamp": true
-  },
   "dns": {
     "servers": [
       {
@@ -506,9 +511,8 @@ generate_node_singbox_json() {
         "detour": "direct"
       },
       {
-        "tag": "local_dns",
-        "address": "1.1.1.1",
-        "detour": "direct"
+        "tag": "cf",
+        "address": "1.1.1.1"
       }
     ],
     "rules": [
@@ -531,44 +535,29 @@ EOF
         "server": "unlock_dns"
       }
     ],
-    "final": "local_dns",
-    "strategy": "prefer_ipv4",
-    "disable_cache": true,
-    "independent_cache": false
+    "strategy": "prefer_ipv4"
   },
-  "inbounds": [
-    {
-      "type": "direct",
-      "tag": "in-0"
-    }
-  ],
+
   "outbounds": [
     {
       "tag": "direct",
-      "type": "direct"
+      "type": "direct",
+      "domain_resolver": {
+        "server": "cf",
+        "strategy": "prefer_ipv4"
+      }
     },
     {
-      "tag": "block",
-      "type": "block"
+      "type": "block",
+      "tag": "block"
     }
   ],
+
   "route": {
     "rules": [
       {
-        "protocol": "dns",
-        "outbound": "direct"
-      },
-      {
         "ip_cidr": ["${SERVER_IP}/32"],
         "outbound": "direct"
-      },
-      {
-        "protocol": "quic",
-        "outbound": "block"
-      },
-      {
-        "protocol": "bittorrent",
-        "outbound": "block"
       },
       {
         "ip_is_private": true,
@@ -576,10 +565,15 @@ EOF
       },
       {
         "outbound": "direct",
-        "network": ["udp", "tcp"]
+        "network": ["udp","tcp"]
       }
-    ],
-    "auto_detect_interface": false
+    ]
+  },
+
+  "experimental": {
+    "cache_file": {
+      "enabled": true
+    }
   }
 }
 EOF
@@ -589,7 +583,7 @@ EOF
 }
 
 # ==========================================================
-# 连通性 & 解锁测试（通过本机 IP）
+# 连通性 & 解锁测试
 # ==========================================================
 
 test_unlock_connectivity() {
@@ -685,8 +679,8 @@ main_menu() {
         echo -e "${GREEN}当前解锁模式：${MODE:-未安装}${NC}"
         echo -e "${GREEN}当前解锁机 IP：${SERVER_IP:-未检测}${NC}\n"
 
-        echo -e "${YELLOW}1) 安装 Prism-DNS + sniproxy 解锁模式（稳定，需你补全 docker/原生实现）${NC}"
-        echo -e "${YELLOW}2) 安装 sing-box 解锁模式（轻量，需你按习惯填充）${NC}"
+        echo -e "${YELLOW}1) 安装 Prism-DNS + sniproxy 解锁模式（稳定，Docker）${NC}"
+        echo -e "${YELLOW}2) 安装 sing-box 解锁模式（轻量，占位结构）${NC}"
         echo -e "${YELLOW}3) 生成【节点后端】sing-box JSON 配置（指向本机）${NC}"
         echo -e "${YELLOW}4) 测试解锁机连通性（ping/TCP/TLS）${NC}"
         echo -e "${YELLOW}5) 测试 GPT / Netflix 解锁状态${NC}"
