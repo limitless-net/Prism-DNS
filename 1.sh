@@ -795,17 +795,23 @@ check_port_availability() {
         echo -e "${YELLOW}$(txt port_conflict_warn)${NC}"
         echo -e "${YELLOW}$(txt tip_prefix) $(txt port_conflict_tip)${NC}"
         echo ""
-        read -p "$(txt port_continue) " continue_install
-        
-        if [[ ! "$continue_install" =~ ^[Yy]$ ]]; then
-            echo -e "${RED}Installation cancelled / 安装已取消${NC}"
-            exit 1
-        fi
+        echo -e "${YELLOW}1) 继续安装（可能冲突）${NC}"
+        echo -e "${YELLOW}2) 取消并返回菜单${NC}"
+        echo ""
+        read -r -p "请选择 [1-2] (默认: 2): " continue_choice
+        case "$continue_choice" in
+            1)
+                ;;
+            *)
+                echo -e "${YELLOW}Installation cancelled / 安装已取消${NC}"
+                return 1
+                ;;
+        esac
     else
         echo -e "${GREEN}$(txt port_check_pass)${NC}"
     fi
     
-    sleep 2
+    sleep 1
 }
 
 # 3. Intelligent IP detection and selection / 智能 IP 检测与选择
@@ -860,41 +866,51 @@ select_public_ip() {
     echo "3. Manual input / 手动输入其他 IP"
 
     echo ""
-    [ "$LANG_CHOICE" = "en" ] && \
-        read -p "Select IP for unlock service [1-3]: " IP_CHOICE || \
-        read -p "请选择作为解锁服务的 IP [1-3]: " IP_CHOICE
+    while true; do
+        echo -e "${YELLOW}请选择解锁服务使用的 IP：${NC}"
+        echo -e "${YELLOW}1) 使用 IPv4${NC}"
+        echo -e "${YELLOW}2) 使用 IPv6${NC}"
+        echo -e "${YELLOW}3) 手动输入 IP${NC}"
+        echo -e "${YELLOW}0) 返回上级菜单${NC}"
+        echo ""
+        read -r -p "$([ "$LANG_CHOICE" = "en" ] && echo "Select [0-3]: " || echo "请选择 [0-3]: ")" IP_CHOICE
 
-    case $IP_CHOICE in
-        1)
-            if [ -z "$IPV4" ]; then 
-                echo -e "${RED}Invalid IPv4 / 无效的 IPv4${NC}"
-                exit 1
-            fi
-            FINAL_IP="$IPV4"
-            ;;
-        2)
-            if [ -z "$IPV6" ]; then 
-                echo -e "${RED}Invalid IPv6 / 无效的 IPv6${NC}"
-                exit 1
-            fi
-            FINAL_IP="$IPV6"
-            ;;
-        3)
-            [ "$LANG_CHOICE" = "en" ] && \
-                read -p "Enter IP address: " FINAL_IP || \
-                read -p "请输入 IP 地址: " FINAL_IP
-            # Validate manually entered IP address
-            if ! validate_ip "$FINAL_IP"; then
-                echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Invalid IP address format" || echo "无效的 IP 地址格式")${NC}"
-                exit 1
-            fi
-            ;;
-        *)
-            echo -e "${YELLOW}Invalid option, using auto-detected IP / 选项错误，使用自动检测到的 IP${NC}"
-            FINAL_IP="${IPV4:-$IPV6}"
-            ;;
-    esac
-    echo -e "\n${GREEN}✓ Selected service IP / 已选择服务 IP: ${FINAL_IP}${NC}"
+        case "$IP_CHOICE" in
+            1)
+                if [ -z "$IPV4" ]; then
+                    echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "IPv4 not detected" || echo "未检测到 IPv4")${NC}"
+                    continue
+                fi
+                FINAL_IP="$IPV4"
+                break
+                ;;
+            2)
+                if [ -z "$IPV6" ]; then
+                    echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "IPv6 not detected" || echo "未检测到 IPv6")${NC}"
+                    continue
+                fi
+                FINAL_IP="$IPV6"
+                break
+                ;;
+            3)
+                read -r -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter IP address: " || echo "请输入 IP 地址: ")" FINAL_IP
+                if ! validate_ip "$FINAL_IP"; then
+                    echo -e "${RED}$([ "$LANG_CHOICE" = "en" ] && echo "Invalid IP address format" || echo "无效的 IP 地址格式")${NC}"
+                    FINAL_IP=""
+                    continue
+                fi
+                break
+                ;;
+            0)
+                return 1
+                ;;
+            *)
+                echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Invalid option" || echo "无效选项")${NC}"
+                ;;
+        esac
+    done
+
+    echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected service IP" || echo "已选择服务 IP") : ${FINAL_IP}${NC}"
     sleep 1
 }
 
@@ -983,19 +999,32 @@ select_deploy_mode() {
         echo -e "${YELLOW}提示：如果 Docker 安装失败或者 VPS 内存较小（< 512MB），建议使用原生模式${NC}"
     fi
     
-    read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter option [1-2] (default: 1): " || echo "请输入选项 [1-2] (默认: 1): ")" mode_input
-    
-    case $mode_input in
-        2)
-            DEPLOY_MODE="native"
-            echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected: Native Mode" || echo "已选择: 原生模式")${NC}"
-            ;;
-        *)
-            DEPLOY_MODE="docker"
-            echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected: Docker Mode" || echo "已选择: Docker 模式")${NC}"
-            ;;
-    esac
-    
+    while true; do
+        echo ""
+        echo -e "${YELLOW}1) Docker 模式（推荐）${NC}"
+        echo -e "${YELLOW}2) 原生模式（低资源）${NC}"
+        echo -e "${YELLOW}0) 返回上级菜单${NC}"
+        echo ""
+        read -r -p "$([ "$LANG_CHOICE" = "en" ] && echo "Select [0-2] (default: 1): " || echo "请选择 [0-2] (默认: 1): ")" mode_input
+        case "$mode_input" in
+            2)
+                DEPLOY_MODE="native"
+                echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected: Native Mode" || echo "已选择: 原生模式")${NC}"
+                break
+                ;;
+            1|"")
+                DEPLOY_MODE="docker"
+                echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected: Docker Mode" || echo "已选择: Docker 模式")${NC}"
+                break
+                ;;
+            0)
+                return 1
+                ;;
+            *)
+                echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Invalid option" || echo "无效选项")${NC}"
+                ;;
+        esac
+    done
     sleep 1
 }
 
@@ -1242,66 +1271,83 @@ address=/max.com/$FINAL_IP
 address=/hbo.com/$FINAL_IP"
     JSON_HBO='"hbomax.com", "max.com", "hbo.com"'
 
-    # --- Menu / 菜单 ---
-    if [ "$LANG_CHOICE" = "en" ]; then
-        echo "Available services (enter numbers separated by commas, e.g. 1,3,5):"
-        echo ""
-        echo "${SKY}=== AI Services ===${NC}"
-        echo "1. ChatGPT (OpenAI)"
-        echo "2. Gemini (Google AI)"
-        echo "3. Copilot (Microsoft)"
-        echo "4. Claude (Anthropic)"
-        echo ""
-        echo "${SKY}=== Streaming Services ===${NC}"
-        echo "5. Netflix"
-        echo "6. Disney+"
-        echo "7. TikTok"
-        echo "8. YouTube"
-        echo "9. Spotify"
-        echo "10. HBO Max"
-        echo ""
-        echo "Quick options:"
-        echo "  a = All AI (1-4)"
-        echo "  s = All Streaming (5-10)"
-        echo "  * = Everything"
-    else
-        echo "可用服务 (输入数字，用逗号分隔，例如 1,3,5):"
-        echo ""
+    # --- Menu / 菜单（可视化多选） ---
+    # sel_1..sel_10: 1=selected, 0=not selected
+    local sel_1=0 sel_2=0 sel_3=0 sel_4=0 sel_5=0 sel_6=0 sel_7=0 sel_8=0 sel_9=0 sel_10=0
+    local cmd
+    while true; do
+        clear
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+        echo -e "${SKY}  选择解锁服务（多选）${NC}"
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+
         echo -e "${SKY}=== AI 服务 ===${NC}"
-        echo "1. ChatGPT (OpenAI)"
-        echo "2. Gemini (Google AI)"
-        echo "3. Copilot (Microsoft)"
-        echo "4. Claude (Anthropic)"
+        printf " %s 1) ChatGPT (OpenAI)\n"   "$([ "$sel_1" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 2) Gemini (Google AI)\n" "$([ "$sel_2" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 3) Copilot (Microsoft)\n" "$([ "$sel_3" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 4) Claude (Anthropic)\n" "$([ "$sel_4" = 1 ] && echo "[x]" || echo "[ ]")"
         echo ""
         echo -e "${SKY}=== 流媒体服务 ===${NC}"
-        echo "5. Netflix"
-        echo "6. Disney+"
-        echo "7. TikTok"
-        echo "8. YouTube"
-        echo "9. Spotify"
-        echo "10. HBO Max"
-        echo ""
-        echo "快捷选项:"
-        echo "  a = 所有 AI (1-4)"
-        echo "  s = 所有流媒体 (5-10)"
-        echo "  * = 全部服务"
-    fi
-    
-    echo ""
-    read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter your choice: " || echo "请输入选择: ")" SERVICE_CHOICE
+        printf " %s 5) Netflix\n"  "$([ "$sel_5" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 6) Disney+\n"  "$([ "$sel_6" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 7) TikTok\n"   "$([ "$sel_7" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 8) YouTube\n"   "$([ "$sel_8" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 9) Spotify\n"   "$([ "$sel_9" = 1 ] && echo "[x]" || echo "[ ]")"
+        printf " %s 10) HBO Max\n"  "$([ "$sel_10" = 1 ] && echo "[x]" || echo "[ ]")"
 
-    # Handle quick options / 处理快捷选项
-    case "$SERVICE_CHOICE" in
-        a|A)
-            SERVICE_CHOICE="1,2,3,4"
-            ;;
-        s|S)
-            SERVICE_CHOICE="5,6,7,8,9,10"
-            ;;
-        \*|all|ALL)
-            SERVICE_CHOICE="1,2,3,4,5,6,7,8,9,10"
-            ;;
-    esac
+        echo ""
+        echo -e "${YELLOW}输入说明：${NC}"
+        echo -e "${YELLOW}- 输入 1-10 切换勾选${NC}"
+        echo -e "${YELLOW}- 输入 a 全选 AI（1-4）${NC}"
+        echo -e "${YELLOW}- 输入 s 全选流媒体（5-10）${NC}"
+        echo -e "${YELLOW}- 输入 * 全选全部${NC}"
+        echo -e "${YELLOW}- 输入 c 清空选择${NC}"
+        echo -e "${YELLOW}- 输入 d 完成并继续部署${NC}"
+        echo -e "${YELLOW}- 输入 0 取消返回${NC}"
+        echo ""
+        read -r -p "请输入命令: " cmd
+
+        case "$cmd" in
+            1) sel_1=$((1-sel_1)) ;;
+            2) sel_2=$((1-sel_2)) ;;
+            3) sel_3=$((1-sel_3)) ;;
+            4) sel_4=$((1-sel_4)) ;;
+            5) sel_5=$((1-sel_5)) ;;
+            6) sel_6=$((1-sel_6)) ;;
+            7) sel_7=$((1-sel_7)) ;;
+            8) sel_8=$((1-sel_8)) ;;
+            9) sel_9=$((1-sel_9)) ;;
+            10) sel_10=$((1-sel_10)) ;;
+            a|A)
+                sel_1=1; sel_2=1; sel_3=1; sel_4=1
+                ;;
+            s|S)
+                sel_5=1; sel_6=1; sel_7=1; sel_8=1; sel_9=1; sel_10=1
+                ;;
+            \*|all|ALL)
+                sel_1=1; sel_2=1; sel_3=1; sel_4=1; sel_5=1; sel_6=1; sel_7=1; sel_8=1; sel_9=1; sel_10=1
+                ;;
+            c|C)
+                sel_1=0; sel_2=0; sel_3=0; sel_4=0; sel_5=0; sel_6=0; sel_7=0; sel_8=0; sel_9=0; sel_10=0
+                ;;
+            d|D)
+                if [ $((sel_1+sel_2+sel_3+sel_4+sel_5+sel_6+sel_7+sel_8+sel_9+sel_10)) -eq 0 ]; then
+                    echo -e "${YELLOW}⚠ 请至少选择 1 个服务${NC}"
+                    sleep 1
+                    continue
+                fi
+                break
+                ;;
+            0)
+                echo -e "${YELLOW}已取消，返回上级菜单${NC}"
+                return 1
+                ;;
+            *)
+                echo -e "${YELLOW}无效命令${NC}"
+                sleep 1
+                ;;
+        esac
+    done
 
     mkdir -p "$WORK_DIR"
     cd "$WORK_DIR" || exit 1
@@ -1311,14 +1357,12 @@ address=/hbo.com/$FINAL_IP"
     TYPE_NAME=""
     local selected_count=0
     
-    # Parse selections / 解析选择
-    IFS=',' read -ra SERVICES <<< "$SERVICE_CHOICE"
-    for service in "${SERVICES[@]}"; do
-        # Trim whitespace / 去除空白
-        service=$(echo "$service" | tr -d '[:space:]')
-        
-        case $service in
+    # Apply selections / 应用选择
+    local service
+    for service in 1 2 3 4 5 6 7 8 9 10; do
+        case "$service" in
             1)
+                [ "$sel_1" -ne 1 ] && continue
                 echo "$CONF_GPT" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_GPT}"
@@ -1327,6 +1371,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             2)
+                [ "$sel_2" -ne 1 ] && continue
                 echo "$CONF_GEMINI" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_GEMINI}"
@@ -1335,6 +1380,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             3)
+                [ "$sel_3" -ne 1 ] && continue
                 echo "$CONF_COPILOT" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_COPILOT}"
@@ -1343,6 +1389,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             4)
+                [ "$sel_4" -ne 1 ] && continue
                 echo "$CONF_CLAUDE" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_CLAUDE}"
@@ -1351,6 +1398,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             5)
+                [ "$sel_5" -ne 1 ] && continue
                 echo "$CONF_NETFLIX" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_NETFLIX}"
@@ -1359,6 +1407,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             6)
+                [ "$sel_6" -ne 1 ] && continue
                 echo "$CONF_DISNEY" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_DISNEY}"
@@ -1367,6 +1416,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             7)
+                [ "$sel_7" -ne 1 ] && continue
                 echo "$CONF_TIKTOK" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_TIKTOK}"
@@ -1375,6 +1425,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             8)
+                [ "$sel_8" -ne 1 ] && continue
                 echo "$CONF_YOUTUBE" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_YOUTUBE}"
@@ -1383,6 +1434,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             9)
+                [ "$sel_9" -ne 1 ] && continue
                 echo "$CONF_SPOTIFY" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_SPOTIFY}"
@@ -1391,6 +1443,7 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             10)
+                [ "$sel_10" -ne 1 ] && continue
                 echo "$CONF_HBO" >> dnsmasq.conf
                 [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
                 FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_HBO}"
@@ -1399,7 +1452,6 @@ address=/hbo.com/$FINAL_IP"
                 ((selected_count++))
                 ;;
             *)
-                echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Ignoring invalid option: $service" || echo "忽略无效选项: $service")${NC}"
                 ;;
         esac
     done
