@@ -1,10 +1,10 @@
 #!/bin/bash
 
 # ==========================================================
-#   NodePass/V2bX 专用解锁服务搭建脚本 (V3.8 GitHub版)
-#   功能：双栈IP选择 + 解锁模式选择 + 审计规则集成 + 自动配置 + 一键卸载
-#   Prism-DNS Unlock Service Setup Script (V3.8)
-#   Features: Dual-stack IP selection + Unlock modes + Audit rules + Auto config + Uninstall
+#   NodePass/V2bX 专用解锁服务搭建脚本 (V5.0 精简版)
+#   功能：双栈IP选择 + 精细化服务选择 + 审计规则集成 + 自动配置 + 一键卸载
+#   Prism-DNS Unlock Service Setup Script (V5.0 Streamlined)
+#   Features: Dual-stack IP + Granular service selection + Audit rules + Auto config + Uninstall
 # ==========================================================
 
 RED='\033[0;31m'
@@ -610,151 +610,259 @@ EOF
 # 5. Select unlock mode & deploy service / 选择解锁模式 & 部署服务
 deploy_service() {
     echo -e "\n${SKY}═══════════════════════════════════════════════${NC}"
-    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Select Unlock Mode${NC}" || echo -e "${SKY}  选择解锁模式${NC}"
+    [ "$LANG_CHOICE" = "en" ] && echo -e "${SKY}  Select Unlock Services (Multi-select)${NC}" || echo -e "${SKY}  选择解锁服务 (可多选)${NC}"
     echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
     
-    # --- Define rules / 定义规则变量 ---
+    # --- Define simplified rules / 定义精简规则变量 ---
+    # Only essential domains for each service / 每个服务只保留必要域名
     
-    # 1. ChatGPT
+    # 1. ChatGPT (OpenAI) - 精简版，只保留核心域名
     CONF_GPT="address=/openai.com/$FINAL_IP
 address=/chatgpt.com/$FINAL_IP
 address=/oaistatic.com/$FINAL_IP
 address=/oaiusercontent.com/$FINAL_IP
-address=/auth0.com/$FINAL_IP
-address=/sentry.io/$FINAL_IP
-address=/identrust.com/$FINAL_IP
-address=/challenges.cloudflare.com/$FINAL_IP
-address=/ai.com/$FINAL_IP
-address=/intercom.io/$FINAL_IP
-address=/intercomcdn.com/$FINAL_IP
-address=/featuregates.org/$FINAL_IP
-address=/statsigapi.net/$FINAL_IP
-address=/stripe.com/$FINAL_IP"
-    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "auth0.com", "sentry.io", "identrust.com", "challenges.cloudflare.com", "ai.com", "intercom.io", "intercomcdn.com", "featuregates.org", "statsigapi.net", "stripe.com"'
+address=/ai.com/$FINAL_IP"
+    JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"'
 
-    # 2. Gemini
-    CONF_GEMINI="address=/bard.google.com/$FINAL_IP
-address=/gemini.google.com/$FINAL_IP
+    # 2. Gemini (Google AI) - 精简版，只保留 AI 核心域名
+    CONF_GEMINI="address=/gemini.google.com/$FINAL_IP
+address=/bard.google.com/$FINAL_IP
 address=/ai.google.dev/$FINAL_IP
 address=/generativelanguage.googleapis.com/$FINAL_IP
 address=/makersuite.google.com/$FINAL_IP
 address=/deepmind.com/$FINAL_IP
-address=/deepmind.google/$FINAL_IP
-address=/google.com/$FINAL_IP
-address=/googleapis.com/$FINAL_IP
-address=/gstatic.com/$FINAL_IP
-address=/googleusercontent.com/$FINAL_IP
-address=/googlevideo.com/$FINAL_IP
-address=/youtube.com/$FINAL_IP
-address=/ytimg.com/$FINAL_IP
-address=/ggpht.com/$FINAL_IP"
-    JSON_GEMINI='"bard.google.com", "gemini.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "google.com", "googleapis.com", "gstatic.com", "googleusercontent.com", "googlevideo.com", "youtube.com", "ytimg.com", "ggpht.com"'
+address=/deepmind.google/$FINAL_IP"
+    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google"'
 
-    # 3. TikTok (独立)
+    # 3. Copilot (Microsoft) - 新增
+    CONF_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
+address=/copilot.cloud.microsoft/$FINAL_IP
+address=/bing.com/$FINAL_IP
+address=/bingapis.com/$FINAL_IP"
+    JSON_COPILOT='"copilot.microsoft.com", "copilot.cloud.microsoft", "bing.com", "bingapis.com"'
+
+    # 4. Claude (Anthropic) - 新增
+    CONF_CLAUDE="address=/anthropic.com/$FINAL_IP
+address=/claude.ai/$FINAL_IP"
+    JSON_CLAUDE='"anthropic.com", "claude.ai"'
+
+    # 5. Netflix - 独立精简
+    CONF_NETFLIX="address=/netflix.com/$FINAL_IP
+address=/netflix.net/$FINAL_IP
+address=/nflxvideo.net/$FINAL_IP
+address=/nflximg.net/$FINAL_IP
+address=/nflxext.com/$FINAL_IP"
+    JSON_NETFLIX='"netflix.com", "netflix.net", "nflxvideo.net", "nflximg.net", "nflxext.com"'
+
+    # 6. Disney+ - 独立精简
+    CONF_DISNEY="address=/disney.com/$FINAL_IP
+address=/disneyplus.com/$FINAL_IP
+address=/dssott.com/$FINAL_IP
+address=/bamgrid.com/$FINAL_IP"
+    JSON_DISNEY='"disney.com", "disneyplus.com", "dssott.com", "bamgrid.com"'
+
+    # 7. TikTok - 独立精简
     CONF_TIKTOK="address=/tiktok.com/$FINAL_IP
 address=/tiktokv.com/$FINAL_IP
 address=/tiktokcdn.com/$FINAL_IP
-address=/byteoversea.com/$FINAL_IP
-address=/ibytedtos.com/$FINAL_IP
-address=/ipstatp.com/$FINAL_IP
-address=/muscdn.com/$FINAL_IP
 address=/musical.ly/$FINAL_IP"
-    JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "byteoversea.com", "ibytedtos.com", "ipstatp.com", "muscdn.com", "musical.ly"'
+    JSON_TIKTOK='"tiktok.com", "tiktokv.com", "tiktokcdn.com", "musical.ly"'
 
-    # 4. 其他流媒体 (Netflix/Disney/Spotify/HBO)
-    CONF_STREAMING="address=/netflix.com/$FINAL_IP
-address=/netflix.net/$FINAL_IP
-address=/nflximg.net/$FINAL_IP
-address=/nflxvideo.net/$FINAL_IP
-address=/nflxso.net/$FINAL_IP
-address=/nflxext.com/$FINAL_IP
-address=/disney.com/$FINAL_IP
-address=/disneyplus.com/$FINAL_IP
-address=/dssott.com/$FINAL_IP
-address=/spotify.com/$FINAL_IP
-address=/pscdn.co/$FINAL_IP
+    # 8. YouTube - 独立精简
+    CONF_YOUTUBE="address=/youtube.com/$FINAL_IP
+address=/googlevideo.com/$FINAL_IP
+address=/ytimg.com/$FINAL_IP
+address=/ggpht.com/$FINAL_IP"
+    JSON_YOUTUBE='"youtube.com", "googlevideo.com", "ytimg.com", "ggpht.com"'
+
+    # 9. Spotify - 独立精简
+    CONF_SPOTIFY="address=/spotify.com/$FINAL_IP
 address=/scdn.co/$FINAL_IP
-address=/hbo.com/$FINAL_IP
-address=/hbogo.com/$FINAL_IP
-address=/hbomax.com/$FINAL_IP
-address=/onetrust.com/$FINAL_IP
-address=/bamgrid.com/$FINAL_IP
-address=/go.com/$FINAL_IP"
-    JSON_STREAMING='"netflix.com", "netflix.net", "nflximg.net", "nflxvideo.net", "nflxso.net", "nflxext.com", "disney.com", "disneyplus.com", "dssott.com", "spotify.com", "pscdn.co", "scdn.co", "hbo.com", "hbogo.com", "hbomax.com", "onetrust.com", "bamgrid.com", "go.com"'
+address=/spotifycdn.com/$FINAL_IP"
+    JSON_SPOTIFY='"spotify.com", "scdn.co", "spotifycdn.com"'
+
+    # 10. HBO Max - 独立精简
+    CONF_HBO="address=/hbomax.com/$FINAL_IP
+address=/max.com/$FINAL_IP
+address=/hbo.com/$FINAL_IP"
+    JSON_HBO='"hbomax.com", "max.com", "hbo.com"'
 
     # --- Menu / 菜单 ---
     if [ "$LANG_CHOICE" = "en" ]; then
-        echo "Please select unlock mode:"
-        echo "1. ChatGPT Only"
-        echo "2. Google Gemini Only (includes Google services)"
-        echo "3. TikTok Only"
-        echo "4. All AI (GPT + Gemini)"
-        echo "5. All Streaming (Netflix/Disney + TikTok)"
-        echo "6. Super Bundle (AI + Streaming + TikTok) [Recommended]"
+        echo "Available services (enter numbers separated by commas, e.g. 1,3,5):"
+        echo ""
+        echo "${SKY}=== AI Services ===${NC}"
+        echo "1. ChatGPT (OpenAI)"
+        echo "2. Gemini (Google AI)"
+        echo "3. Copilot (Microsoft)"
+        echo "4. Claude (Anthropic)"
+        echo ""
+        echo "${SKY}=== Streaming Services ===${NC}"
+        echo "5. Netflix"
+        echo "6. Disney+"
+        echo "7. TikTok"
+        echo "8. YouTube"
+        echo "9. Spotify"
+        echo "10. HBO Max"
+        echo ""
+        echo "Quick options:"
+        echo "  a = All AI (1-4)"
+        echo "  s = All Streaming (5-10)"
+        echo "  * = Everything"
     else
-        echo "请选择解锁模式："
-        echo "1. 仅解锁 ChatGPT"
-        echo "2. 仅解锁 Google Gemini (含谷歌全家桶)"
-        echo "3. 仅解锁 TikTok (国际抖音)"
-        echo "4. 解锁所有 AI (GPT + Gemini)"
-        echo "5. 解锁所有流媒体 (Netflix/Disney + TikTok)"
-        echo "6. 超级全家桶 (AI + 流媒体 + TikTok) [推荐]"
+        echo "可用服务 (输入数字，用逗号分隔，例如 1,3,5):"
+        echo ""
+        echo -e "${SKY}=== AI 服务 ===${NC}"
+        echo "1. ChatGPT (OpenAI)"
+        echo "2. Gemini (Google AI)"
+        echo "3. Copilot (Microsoft)"
+        echo "4. Claude (Anthropic)"
+        echo ""
+        echo -e "${SKY}=== 流媒体服务 ===${NC}"
+        echo "5. Netflix"
+        echo "6. Disney+"
+        echo "7. TikTok"
+        echo "8. YouTube"
+        echo "9. Spotify"
+        echo "10. HBO Max"
+        echo ""
+        echo "快捷选项:"
+        echo "  a = 所有 AI (1-4)"
+        echo "  s = 所有流媒体 (5-10)"
+        echo "  * = 全部服务"
     fi
     
-    read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter option [1-6]: " || echo "请输入选项 [1-6]: ")" MODE_CHOICE
+    echo ""
+    read -p "$([ "$LANG_CHOICE" = "en" ] && echo "Enter your choice: " || echo "请输入选择: ")" SERVICE_CHOICE
+
+    # Handle quick options / 处理快捷选项
+    case "$SERVICE_CHOICE" in
+        a|A)
+            SERVICE_CHOICE="1,2,3,4"
+            ;;
+        s|S)
+            SERVICE_CHOICE="5,6,7,8,9,10"
+            ;;
+        \*|all|ALL)
+            SERVICE_CHOICE="1,2,3,4,5,6,7,8,9,10"
+            ;;
+    esac
 
     mkdir -p "$WORK_DIR"
     cd "$WORK_DIR" || exit 1
     echo "" > dnsmasq.conf
-
-    case $MODE_CHOICE in
-        1)
-            echo "$CONF_GPT" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_GPT"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "ChatGPT Only" || echo "ChatGPT 专用")
-            ;;
-        2)
-            echo "$CONF_GEMINI" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_GEMINI"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "Gemini Only" || echo "Gemini 专用")
-            ;;
-        3)
-            echo "$CONF_TIKTOK" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_TIKTOK"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "TikTok Only" || echo "TikTok 专用")
-            ;;
-        4)
-            echo "$CONF_GPT" >> dnsmasq.conf
-            echo "$CONF_GEMINI" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_GPT, $JSON_GEMINI"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "All AI" || echo "所有 AI")
-            ;;
-        5)
-            echo "$CONF_STREAMING" >> dnsmasq.conf
-            echo "$CONF_TIKTOK" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_STREAMING, $JSON_TIKTOK"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "All Streaming" || echo "全流媒体 (含TikTok)")
-            ;;
-        6)
-            echo "$CONF_GPT" >> dnsmasq.conf
-            echo "$CONF_GEMINI" >> dnsmasq.conf
-            echo "$CONF_STREAMING" >> dnsmasq.conf
-            echo "$CONF_TIKTOK" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_GPT, $JSON_GEMINI, $JSON_STREAMING, $JSON_TIKTOK"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "Super Bundle" || echo "超级全家桶")
-            ;;
-        *)
-            echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Invalid option, using Super Bundle" || echo "默认选择全家桶")${NC}"
-            echo "$CONF_GPT" >> dnsmasq.conf
-            echo "$CONF_GEMINI" >> dnsmasq.conf
-            echo "$CONF_STREAMING" >> dnsmasq.conf
-            echo "$CONF_TIKTOK" >> dnsmasq.conf
-            FINAL_JSON_LIST="$JSON_GPT, $JSON_GEMINI, $JSON_STREAMING, $JSON_TIKTOK"
-            TYPE_NAME=$([ "$LANG_CHOICE" = "en" ] && echo "Super Bundle" || echo "超级全家桶")
-            ;;
-    esac
     
-    echo -e "\n${GREEN}✓ Selected mode / 已选择模式: ${TYPE_NAME}${NC}\n"
+    FINAL_JSON_LIST=""
+    TYPE_NAME=""
+    local selected_count=0
+    
+    # Parse selections / 解析选择
+    IFS=',' read -ra SERVICES <<< "$SERVICE_CHOICE"
+    for service in "${SERVICES[@]}"; do
+        # Trim whitespace / 去除空白
+        service=$(echo "$service" | tr -d '[:space:]')
+        
+        case $service in
+            1)
+                echo "$CONF_GPT" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_GPT}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}ChatGPT"
+                ((selected_count++))
+                ;;
+            2)
+                echo "$CONF_GEMINI" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_GEMINI}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}Gemini"
+                ((selected_count++))
+                ;;
+            3)
+                echo "$CONF_COPILOT" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_COPILOT}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}Copilot"
+                ((selected_count++))
+                ;;
+            4)
+                echo "$CONF_CLAUDE" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_CLAUDE}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}Claude"
+                ((selected_count++))
+                ;;
+            5)
+                echo "$CONF_NETFLIX" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_NETFLIX}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}Netflix"
+                ((selected_count++))
+                ;;
+            6)
+                echo "$CONF_DISNEY" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_DISNEY}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}Disney+"
+                ((selected_count++))
+                ;;
+            7)
+                echo "$CONF_TIKTOK" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_TIKTOK}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}TikTok"
+                ((selected_count++))
+                ;;
+            8)
+                echo "$CONF_YOUTUBE" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_YOUTUBE}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}YouTube"
+                ((selected_count++))
+                ;;
+            9)
+                echo "$CONF_SPOTIFY" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_SPOTIFY}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}Spotify"
+                ((selected_count++))
+                ;;
+            10)
+                echo "$CONF_HBO" >> dnsmasq.conf
+                [ -n "$FINAL_JSON_LIST" ] && FINAL_JSON_LIST="$FINAL_JSON_LIST, "
+                FINAL_JSON_LIST="${FINAL_JSON_LIST}${JSON_HBO}"
+                [ -n "$TYPE_NAME" ] && TYPE_NAME="$TYPE_NAME+"
+                TYPE_NAME="${TYPE_NAME}HBO"
+                ((selected_count++))
+                ;;
+            *)
+                echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "Ignoring invalid option: $service" || echo "忽略无效选项: $service")${NC}"
+                ;;
+        esac
+    done
+    
+    # Check if any service was selected / 检查是否选择了服务
+    if [ $selected_count -eq 0 ]; then
+        echo -e "${YELLOW}$([ "$LANG_CHOICE" = "en" ] && echo "No valid service selected, defaulting to ChatGPT" || echo "未选择有效服务，默认选择 ChatGPT")${NC}"
+        echo "$CONF_GPT" >> dnsmasq.conf
+        FINAL_JSON_LIST="$JSON_GPT"
+        TYPE_NAME="ChatGPT"
+    fi
+    
+    # Simplify type name if too many services / 简化显示名称
+    if [ $selected_count -ge 5 ]; then
+        TYPE_NAME="$([ "$LANG_CHOICE" = "en" ] && echo "Custom ($selected_count services)" || echo "自定义 ($selected_count 个服务)")"
+    fi
+    
+    echo -e "\n${GREEN}✓ $([ "$LANG_CHOICE" = "en" ] && echo "Selected:" || echo "已选择:") ${TYPE_NAME}${NC}\n"
     sleep 1
 
     # If native mode, deploy using native method
