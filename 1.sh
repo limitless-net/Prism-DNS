@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V12.0 原生修复版)
+#   V2bX 专用解锁服务总控脚本 (V13.0 核心修复版)
 #   
-#   修复日志：
-#   1. 状态检测升级：显示具体的端口占用进程名
-#   2. 原生模式增强：强力清除 Nginx/Apache 占用
-#   3. Sniproxy 权限与路径修复
+#   修复日志 (V13.0)：
+#   1. [关键] 修复 sniproxy.conf 缺失 resolver 导致容器崩溃的问题
+#   2. [关键] 修复 "Only socket address backends" 错误
+#   3. 优化 Dockerfile 启动顺序
 # ==========================================================
 
 RED='\033[0;31m'
@@ -31,6 +31,19 @@ check_root() {
     fi
 }
 
+spinner() {
+    local pid=$1
+    local msg=$2
+    local spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'
+    local i=0
+    while kill -0 $pid 2>/dev/null; do
+        i=$(( (i+1) %10 ))
+        printf "\r%s%s %s%s" "${YELLOW}" "${spin:$i:1}" "${msg}" "${NC}"
+        sleep 0.1
+    done
+    printf "\r\033[K"
+}
+
 save_config() {
     mkdir -p "$WORK_DIR"
     echo "FINAL_IP=\"$FINAL_IP\"" > "$CONFIG_FILE"
@@ -39,39 +52,32 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 强力清理端口 (针对原生模式优化)
-force_cleanup_ports() {
-    echo -e "${YELLOW}>>> 正在清理端口占用 (Nginx/Apache)...${NC}"
-    
-    # 1. 停止并禁用常见的 Web 服务器
-    systemctl stop nginx 2>/dev/null
-    systemctl disable nginx 2>/dev/null
-    systemctl stop apache2 2>/dev/null
-    systemctl disable apache2 2>/dev/null
-    systemctl stop caddy 2>/dev/null
-    systemctl disable caddy 2>/dev/null
-    
-    # 2. 停止自身服务
-    systemctl stop dnsmasq 2>/dev/null
-    systemctl stop sniproxy 2>/dev/null
-    
-    # 3. 解决 systemd-resolved (53端口)
+# 暴力释放端口
+force_cleanup() {
+    echo -e "${YELLOW}>>> 正在执行强制清理...${NC}"
     systemctl stop systemd-resolved 2>/dev/null
     systemctl disable systemd-resolved 2>/dev/null
+    systemctl stop dnsmasq 2>/dev/null
+    systemctl stop sniproxy 2>/dev/null
+    systemctl stop nginx 2>/dev/null
     
-    # 4. 暴力杀进程
     fuser -k 53/tcp 2>/dev/null
     fuser -k 53/udp 2>/dev/null
     fuser -k 80/tcp 2>/dev/null
     fuser -k 443/tcp 2>/dev/null
     
-    # 临时修复 DNS 以防断网
+    if command -v docker &> /dev/null; then
+        echo -e "${YELLOW}正在删除旧容器...${NC}"
+        docker rm -f dns_unlock 2>/dev/null
+        cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
+    fi
+    
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo -e "${GREEN}端口清理完毕${NC}"
+    echo -e "${GREEN}清理完毕${NC}"
 }
 
 # ==========================================================
-# 核心逻辑 (完全保留)
+# 核心逻辑
 # ==========================================================
 
 define_rules() {
@@ -217,11 +223,9 @@ select_services_logic() {
 
 run_install() {
     check_root
+    force_cleanup
     
-    # 0. 强力清理端口 (修复原生模式冲突的关键)
-    force_cleanup_ports
-    
-    # 1. IP 选择
+    # IP 选择
     IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
     IPV6=$(curl -6s --max-time 3 api.ip.sb/ip || curl -6s --max-time 3 ifconfig.co)
     echo -e "\n${SKY}检测本机 IP:${NC}"
@@ -236,14 +240,13 @@ run_install() {
     esac
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}IP 无效${NC}"; return; fi
 
-    # 2. 模式选择
+    # 模式选择
     echo -e "\n${SKY}部署模式:${NC}"
     echo "1. Docker 模式 (环境隔离)"
-    echo "2. 原生模式 (推荐! 更稳定、省资源)"
+    echo "2. 原生模式 (推荐! 更稳定)"
     read -p "选择 [1-2] (默认1): " MODE_OPT
     if [ "$MODE_OPT" == "2" ]; then DEPLOY_MODE="native"; else DEPLOY_MODE="docker"; fi
 
-    # 3. 服务选择
     select_services_logic
 
     # === 原生模式 ===
@@ -251,12 +254,9 @@ run_install() {
         echo -e "${YELLOW}>>> 正在安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
         
-        # 确保目录权限正确
-        mkdir -p /etc/dnsmasq.d
-        mkdir -p /var/log/sniproxy
-        chown daemon:daemon /var/log/sniproxy
+        systemctl stop systemd-resolved 2>/dev/null
+        systemctl disable systemd-resolved 2>/dev/null
         
-        # 配置 Dnsmasq
         cat > /etc/dnsmasq.conf <<EOF
 port=53
 no-resolv
@@ -264,26 +264,29 @@ server=8.8.8.8
 conf-dir=/etc/dnsmasq.d/,*.conf
 cache-size=1000
 EOF
+        mkdir -p /etc/dnsmasq.d
         cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
         
-        # 配置 Sniproxy (修复 Pid 路径问题)
+        mkdir -p /var/log/sniproxy
+        # 修复 sniproxy 配置
         cat > /etc/sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
+resolver {
+    nameserver 8.8.8.8
+    mode ipv4_only
+}
 error_log { filename /var/log/sniproxy/error.log; priority notice; }
 access_log { filename /var/log/sniproxy/access.log; }
 listen 80 { proto http; table http_hosts; }
 listen 443 { proto tls; table https_hosts; }
-table http_hosts { .* *:80; }
-table https_hosts { .* *:443; }
+table http_hosts { .* *; }
+table https_hosts { .* *; }
 EOF
-        # 重启服务
-        systemctl unmask dnsmasq sniproxy
+        systemctl restart dnsmasq sniproxy
         systemctl enable dnsmasq sniproxy
-        systemctl restart dnsmasq
-        systemctl restart sniproxy
         
-    # === Docker 模式 ===
+    # === Docker 模式 (修复版) ===
     else
         echo -e "${YELLOW}>>> 正在配置 Docker 环境...${NC}"
         if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | bash; fi
@@ -304,16 +307,27 @@ RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'cache-size=1000' >> /etc/dnsmasq.conf
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
+
+        # 【关键修复】Sniproxy 必须包含 resolver 配置！
         cat > sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
+resolver {
+    nameserver 8.8.8.8
+    mode ipv4_only
+}
 error_log { filename /dev/stderr; priority notice; }
 access_log { filename /dev/stdout; }
 listen 80 { proto http; table http_hosts; }
 listen 443 { proto tls; table https_hosts; }
-table http_hosts { .* *; }
-table https_hosts { .* *; }
+table http_hosts {
+    .* *
+}
+table https_hosts {
+    .* *
+}
 EOF
+
         cat > docker-compose.yml <<EOF
 services:
   unlock:
@@ -326,6 +340,8 @@ services:
       - ./dnsmasq.conf:/etc/dnsmasq.d/custom_unlock.conf
       - ./sniproxy.conf:/etc/sniproxy.conf
 EOF
+        
+        echo -e "${YELLOW}启动容器...${NC}"
         docker rm -f dns_unlock 2>/dev/null
         docker compose down --remove-orphans 2>/dev/null
         docker compose up -d --build --remove-orphans
@@ -367,25 +383,18 @@ fw_settings() {
     read -p "按回车返回..." _
 }
 
-# 改进的状态检查 (显示占用者)
 check_status() {
     clear
     echo -e "${SKY}>>> 系统状态检查${NC}"
     echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
     echo -e "模式: ${YELLOW}${DEPLOY_MODE:-未知}${NC}"
     
-    echo -e "\n端口占用详情:"
+    echo -e "\n端口监听状态 (53/80/443):"
     for p in 53 80 443; do
-        # 获取占用端口的进程名
-        proc=$(ss -tulnp | grep ":$p " | awk '{print $7}' | cut -d'"' -f2 | cut -d'/' -f2 | head -n1)
-        if [ -n "$proc" ]; then
-            if [[ "$proc" == "dnsmasq" || "$proc" == "sniproxy" || "$proc" == "docker-proxy" ]]; then
-                echo -e "端口 $p: ${GREEN}正常 ($proc)${NC}"
-            else
-                echo -e "端口 $p: ${RED}被占用 ($proc) - 需清理!${NC}"
-            fi
-        else
-            echo -e "端口 $p: ${RED}未监听${NC}"
+        if ss -tuln | grep -q ":$p "; then 
+            echo -e "端口 $p: ${GREEN}正常 (监听中)${NC}"
+        else 
+            echo -e "端口 $p: ${RED}异常 (未监听)${NC}"
         fi
     done
     
@@ -394,14 +403,8 @@ check_status() {
         if docker ps | grep -q "dns_unlock"; then echo -e "Docker: ${GREEN}运行中${NC}"; else echo -e "Docker: ${RED}停止${NC}"; fi
     else
         systemctl is-active dnsmasq >/dev/null && echo -e "Dnsmasq: ${GREEN}运行中${NC}" || echo -e "Dnsmasq: ${RED}停止${NC}"
-        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}" || echo -e "Sniproxy: ${RED}停止 (被占用/配置错)${NC}"
+        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}" || echo -e "Sniproxy: ${RED}停止${NC}"
     fi
-    
-    # 额外提示
-    if systemctl is-active nginx >/dev/null 2>&1 || systemctl is-active apache2 >/dev/null 2>&1; then
-        echo -e "\n${RED}警告: 发现 Nginx/Apache 正在运行，请重新执行安装以强制清理!${NC}"
-    fi
-    
     read -p "按回车返回..." _
 }
 
@@ -424,6 +427,8 @@ uninstall_all() {
     echo -e "${RED}正在卸载...${NC}"
     if command -v docker &> /dev/null; then docker rm -f dns_unlock 2>/dev/null; fi
     systemctl stop dnsmasq sniproxy 2>/dev/null
+    systemctl enable systemd-resolved 2>/dev/null
+    systemctl start systemd-resolved 2>/dev/null
     rm -rf "$WORK_DIR"
     echo -e "${GREEN}卸载完成${NC}"
     read -p "按回车返回..." _
@@ -547,14 +552,10 @@ EOF
     read -p "按回车返回菜单..." _
 }
 
-# ==========================================================
-# 主菜单
-# ==========================================================
-
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V12.0 原生修复版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V13.0 核心修复版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
