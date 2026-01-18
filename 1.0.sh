@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V16.0 进程猎杀版)
+#   V2bX 专用解锁服务总控脚本 (V17.0 状态误报修复版)
 #   
 #   修复日志：
-#   1. [关键] 增加 lsof/netstat 进程猎杀，解决 "Address already in use"
-#   2. [关键] 暴力解除 systemd-resolved 对 53 端口的锁定
-#   3. [优化] 状态检查现在会显示占用端口的具体进程名
+#   1. [重构] 状态检测不再依赖进程名，改为真实端口连接测试
+#   2. [重构] 安装前使用 kill -9 暴力清理所有相关端口
+#   3. [新增] 安装后自动 curl 测试解锁效果
 # ==========================================================
 
 RED='\033[0;31m'
@@ -38,53 +38,49 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 🛠️ 暴力释放端口 (猎杀模式)
-kill_port_user() {
+# 🛠️ 暴力释放端口 (灭霸模式)
+kill_port_process() {
     local port=$1
-    # 查找占用端口的 PID
-    pids=$(lsof -t -i:$port 2>/dev/null)
+    # 获取占用端口的 PID
+    pids=$(lsof -t -i:$port 2>/dev/null || netstat -nlp | grep ":$port " | awk '{print $7}' | cut -d'/' -f1)
     if [ -n "$pids" ]; then
-        echo -e "${YELLOW}发现端口 $port 被进程占用 (PID: $pids)，正在清理...${NC}"
-        kill -9 $pids 2>/dev/null
+        echo -e "${YELLOW}端口 $port 被占用，正在强制清理 (PID: $pids)...${NC}"
+        for pid in $pids; do
+            kill -9 $pid 2>/dev/null
+        done
     fi
 }
 
 force_cleanup() {
-    echo -e "${YELLOW}>>> 正在执行环境清理与端口释放...${NC}"
+    echo -e "${YELLOW}>>> 正在清理环境...${NC}"
     
-    # 1. 停止 Docker 容器
+    # 1. 停止容器
     if command -v docker &> /dev/null; then
-        docker rm -f dns_unlock 2>/dev/null
+        docker rm -f dns_unlock sniproxy_unlock 2>/dev/null
         cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
     fi
 
-    # 2. 停止常见 Web 服务
-    systemctl stop nginx 2>/dev/null
-    systemctl disable nginx 2>/dev/null
-    systemctl stop apache2 2>/dev/null
-    systemctl disable apache2 2>/dev/null
-    systemctl stop caddy 2>/dev/null
+    # 2. 停止服务
+    services=("nginx" "apache2" "caddy" "systemd-resolved" "dnsmasq" "sniproxy")
+    for svc in "${services[@]}"; do
+        systemctl stop "$svc" 2>/dev/null
+        systemctl disable "$svc" 2>/dev/null
+    done
     
-    # 3. 彻底杀死 systemd-resolved (53端口元凶)
-    systemctl stop systemd-resolved 2>/dev/null
-    systemctl disable systemd-resolved 2>/dev/null
+    # 3. 暴力杀进程 (53/80/443)
+    kill_port_process 53
+    kill_port_process 80
+    kill_port_process 443
     
-    # 4. 暴力猎杀端口占用进程
-    kill_port_user 53
-    kill_port_user 80
-    kill_port_user 443
-    
-    # 5. 重建 resolv.conf (防止 systemd-resolved 复活)
+    # 4. 重置 resolv.conf
     rm -f /etc/resolv.conf
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    # 锁定文件防止被修改 (可选，暂时不锁以免影响其他)
-    # chattr +i /etc/resolv.conf 2>/dev/null
 
-    echo -e "${GREEN}端口清理完毕${NC}"
+    echo -e "${GREEN}环境清理完毕${NC}"
 }
 
 # ==========================================================
-# 核心逻辑
+# 核心配置生成
 # ==========================================================
 
 define_rules() {
@@ -216,9 +212,10 @@ select_services_logic() {
 run_install() {
     check_root
     
-    # 安装必要工具 (用于猎杀进程)
+    # 安装工具
     if ! command -v lsof &> /dev/null; then apt-get update && apt-get install -y lsof; fi
     
+    # 彻底清理
     force_cleanup
     
     # IP 选择
@@ -249,9 +246,6 @@ run_install() {
         echo -e "${YELLOW}>>> 正在安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
         
-        # 二次清理，确保 apt install 后没有自动启动占用
-        systemctl stop dnsmasq sniproxy 2>/dev/null
-        
         cat > /etc/dnsmasq.conf <<EOF
 port=53
 no-resolv
@@ -263,6 +257,7 @@ EOF
         cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
         
         mkdir -p /var/log/sniproxy
+        chown daemon:daemon /var/log/sniproxy
         cat > /etc/sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
@@ -280,14 +275,13 @@ EOF
         systemctl restart dnsmasq sniproxy
         systemctl enable dnsmasq sniproxy
         
-    # === Docker 模式 (Debian 构建版) ===
+    # === Docker 模式 ===
     else
         echo -e "${YELLOW}>>> 正在配置 Docker 环境...${NC}"
         if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | bash; fi
         
         cd "$WORK_DIR"
         
-        # 使用 Debian 构建，规避 ghcr 拉取失败和 sniproxy 功能缺失问题
         cat > Dockerfile <<EOF
 FROM debian:bullseye-slim
 RUN apt-get update && \
@@ -337,18 +331,18 @@ services:
 EOF
         
         echo -e "${YELLOW}启动容器...${NC}"
-        docker rm -f dns_unlock 2>/dev/null
         docker compose down --remove-orphans 2>/dev/null
         docker compose up -d --build --remove-orphans
     fi
 
     save_config
-    echo -e "${GREEN}安装完成！${NC}"
-    read -p "按回车返回菜单..." _
+    echo -e "${GREEN}安装流程结束!${NC}"
+    echo -e "${SKY}正在自动测试服务连通性...${NC}"
+    check_status
 }
 
 # ==========================================================
-# 辅助功能
+# 辅助功能 (修复误报问题)
 # ==========================================================
 
 fw_settings() {
@@ -368,10 +362,7 @@ fw_settings() {
                 iptables -I INPUT -s "$ip" -p tcp --dport 80 -j ACCEPT
                 iptables -I INPUT -s "$ip" -p tcp --dport 443 -j ACCEPT
             done
-            iptables -A INPUT -p tcp --dport 53 -j DROP
-            iptables -A INPUT -p udp --dport 53 -j DROP
-            iptables -A INPUT -p tcp --dport 80 -j DROP
-            iptables -A INPUT -p tcp --dport 443 -j DROP
+            # 注意：这里暂不默认DROP，以免用户把自己锁死
         fi
         echo -e "${GREEN}规则已更新${NC}"
     fi
@@ -380,33 +371,59 @@ fw_settings() {
 
 check_status() {
     clear
-    echo -e "${SKY}>>> 系统状态检查${NC}"
+    echo -e "${SKY}>>> 系统状态检查 (实测模式)${NC}"
     echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
-    echo -e "模式: ${YELLOW}${DEPLOY_MODE:-未知}${NC}"
     
-    echo -e "\n端口占用详情 (最重要!!!):"
-    for p in 53 80 443; do
-        # 获取占用端口的进程名
-        proc=$(lsof -i :$p -t | xargs ps -p 2>/dev/null | grep -v PID | awk '{print $4}' | head -n1)
-        
-        if [ -n "$proc" ]; then
-            if [[ "$proc" == "dnsmasq" || "$proc" == "sniproxy" || "$proc" == "docker-proxy" ]]; then
-                echo -e "端口 $p: ${GREEN}正常 (进程: $proc)${NC}"
+    # 端口实测逻辑：尝试连接端口，而不是猜进程名
+    check_port_active() {
+        local port=$1
+        local proto=$2
+        if [ "$proto" == "udp" ]; then
+            # UDP 53 检测比较难，简单用 netstat
+            if netstat -unlp | grep -q ":$port "; then
+                echo -e "端口 $port (UDP): ${GREEN}正常 (监听中)${NC}"
             else
-                echo -e "端口 $p: ${RED}被抢占! (进程: $proc) -> 请卸载该软件或使用原生模式${NC}"
+                echo -e "端口 $port (UDP): ${RED}异常 (未监听)${NC}"
             fi
         else
-            echo -e "端口 $p: ${RED}未监听 (服务未启动)${NC}"
+            # TCP 检测：直接连接
+            # 使用 timeout 和 bash 内置的 /dev/tcp 进行测试 (无需 nc/telnet)
+            if timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" &>/dev/null; then
+                echo -e "端口 $port (TCP): ${GREEN}正常 (连接成功)${NC}"
+            else
+                echo -e "端口 $port (TCP): ${RED}异常 (无法连接)${NC}"
+            fi
         fi
-    done
+    }
+
+    echo -e "\n端口状态:"
+    check_port_active 53 udp
+    check_port_active 80 tcp
+    check_port_active 443 tcp
     
-    echo -e "\n服务状态:"
-    if [ "$DEPLOY_MODE" == "docker" ]; then
-        if docker ps | grep -q "dns_unlock"; then echo -e "Docker: ${GREEN}运行中${NC}"; else echo -e "Docker: ${RED}停止${NC}"; fi
+    echo -e "\n功能实测 (模拟落地机访问):"
+    if [ -n "$FINAL_IP" ]; then
+        # 测试 DNS
+        echo -n "DNS 劫持测试 (OpenAI): "
+        TEST_DNS=$(dig +short @127.0.0.1 openai.com 2>/dev/null)
+        if [ "$TEST_DNS" == "$FINAL_IP" ]; then
+            echo -e "${GREEN}成功 (解析结果: $TEST_DNS)${NC}"
+        else
+            echo -e "${RED}失败 (解析结果: ${TEST_DNS:-无})${NC}"
+        fi
+        
+        # 测试 Sniproxy (HTTP)
+        echo -n "Sniproxy 转发测试 (HTTP): "
+        TEST_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: whatismyip.akamai.com" http://127.0.0.1)
+        if [[ "$TEST_HTTP" =~ ^(200|301|302|400|403|404)$ ]]; then
+             echo -e "${GREEN}服务存活 (Code: $TEST_HTTP)${NC}"
+        else
+             echo -e "${RED}连接失败 (Code: ${TEST_HTTP:-超时})${NC}"
+        fi
     else
-        systemctl is-active dnsmasq >/dev/null && echo -e "Dnsmasq: ${GREEN}运行中${NC}" || echo -e "Dnsmasq: ${RED}停止${NC}"
-        systemctl is-active sniproxy >/dev/null && echo -e "Sniproxy: ${GREEN}运行中${NC}" || echo -e "Sniproxy: ${RED}停止${NC}"
+        echo -e "${YELLOW}未配置 IP，跳过测试${NC}"
     fi
+    
     read -p "按回车返回..." _
 }
 
@@ -429,12 +446,6 @@ uninstall_all() {
     echo -e "${RED}正在卸载...${NC}"
     if command -v docker &> /dev/null; then docker rm -f dns_unlock 2>/dev/null; fi
     systemctl stop dnsmasq sniproxy 2>/dev/null
-    
-    # 尝试恢复
-    rm -f /etc/resolv.conf
-    echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    # systemctl start systemd-resolved 2>/dev/null 
-    
     rm -rf "$WORK_DIR"
     echo -e "${GREEN}卸载完成${NC}"
     read -p "按回车返回..." _
@@ -442,7 +453,6 @@ uninstall_all() {
 
 gen_json() {
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}请先安装!${NC}"; read -p "" _; return; fi
-    
     if [[ "$FINAL_IP" == *":"* ]]; then IP_CIDR="${FINAL_IP}/128"; else IP_CIDR="${FINAL_IP}/32"; fi
 
     clear
@@ -564,7 +574,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V16.0 进程猎杀版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V17.0 状态修复版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
@@ -572,7 +582,7 @@ while true; do
     echo -e "${YELLOW}1) 安装 / 重装解锁服务 (Docker/原生)${NC}"
     echo -e "${YELLOW}2) 设置白名单 IP (防火墙)${NC}"
     echo -e "${YELLOW}3) 生成 V2bX/Sing-box JSON 配置 (含审计)${NC}"
-    echo -e "${YELLOW}4) 查看运行状态 (含占用检测)${NC}"
+    echo -e "${YELLOW}4) 查看运行状态 (含实测)${NC}"
     echo -e "${YELLOW}5) 查看错误日志${NC}"
     echo -e "${RED}6) 卸载服务${NC}"
     echo -e "${RED}0) 退出${NC}"
