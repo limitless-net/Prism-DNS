@@ -1,11 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V17.0 状态误报修复版)
+#   V2bX 专用解锁服务总控脚本 (V18.0 依赖补全版)
 #   
 #   修复日志：
-#   1. [重构] 状态检测不再依赖进程名，改为真实端口连接测试
-#   2. [重构] 安装前使用 kill -9 暴力清理所有相关端口
-#   3. [新增] 安装后自动 curl 测试解锁效果
+#   1. [关键] 自动安装 net-tools/dnsutils，修复 "command not found"
+#   2. [关键] 修复 UDP 53 端口检测逻辑 (优先使用 ss)
+#   3. [优化] 状态检测通过双重手段确认 (Local + Public IP)
 # ==========================================================
 
 RED='\033[0;31m'
@@ -30,6 +30,19 @@ check_root() {
     fi
 }
 
+# 🛠️ 自动补全系统依赖 (解决 netstat/dig 找不到的问题)
+install_base_tools() {
+    if ! command -v netstat &> /dev/null || ! command -v dig &> /dev/null || ! command -v lsof &> /dev/null; then
+        echo -e "${YELLOW}>>> 检测到缺少基础工具，正在补全 (net-tools, dnsutils)...${NC}"
+        if [ -f /etc/debian_version ]; then
+            apt-get update -y && apt-get install -y net-tools dnsutils lsof procps
+        elif [ -f /etc/redhat-release ]; then
+            yum install -y net-tools bind-utils lsof
+        fi
+        echo -e "${GREEN}基础工具安装完毕${NC}"
+    fi
+}
+
 save_config() {
     mkdir -p "$WORK_DIR"
     echo "FINAL_IP=\"$FINAL_IP\"" > "$CONFIG_FILE"
@@ -38,49 +51,37 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 🛠️ 暴力释放端口 (灭霸模式)
+# 暴力释放端口
 kill_port_process() {
     local port=$1
-    # 获取占用端口的 PID
     pids=$(lsof -t -i:$port 2>/dev/null || netstat -nlp | grep ":$port " | awk '{print $7}' | cut -d'/' -f1)
     if [ -n "$pids" ]; then
         echo -e "${YELLOW}端口 $port 被占用，正在强制清理 (PID: $pids)...${NC}"
-        for pid in $pids; do
-            kill -9 $pid 2>/dev/null
-        done
+        for pid in $pids; do kill -9 $pid 2>/dev/null; done
     fi
 }
 
 force_cleanup() {
     echo -e "${YELLOW}>>> 正在清理环境...${NC}"
-    
-    # 1. 停止容器
     if command -v docker &> /dev/null; then
         docker rm -f dns_unlock sniproxy_unlock 2>/dev/null
         cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
     fi
-
-    # 2. 停止服务
     services=("nginx" "apache2" "caddy" "systemd-resolved" "dnsmasq" "sniproxy")
     for svc in "${services[@]}"; do
         systemctl stop "$svc" 2>/dev/null
         systemctl disable "$svc" 2>/dev/null
     done
-    
-    # 3. 暴力杀进程 (53/80/443)
     kill_port_process 53
     kill_port_process 80
     kill_port_process 443
-    
-    # 4. 重置 resolv.conf
     rm -f /etc/resolv.conf
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
-
     echo -e "${GREEN}环境清理完毕${NC}"
 }
 
 # ==========================================================
-# 核心配置生成
+# 核心逻辑
 # ==========================================================
 
 define_rules() {
@@ -211,14 +212,9 @@ select_services_logic() {
 
 run_install() {
     check_root
-    
-    # 安装工具
-    if ! command -v lsof &> /dev/null; then apt-get update && apt-get install -y lsof; fi
-    
-    # 彻底清理
+    install_base_tools
     force_cleanup
     
-    # IP 选择
     IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
     IPV6=$(curl -6s --max-time 3 api.ip.sb/ip || curl -6s --max-time 3 ifconfig.co)
     echo -e "\n${SKY}检测本机 IP:${NC}"
@@ -234,8 +230,8 @@ run_install() {
     if [ -z "$FINAL_IP" ]; then echo -e "${RED}IP 无效${NC}"; return; fi
 
     echo -e "\n${SKY}部署模式:${NC}"
-    echo "1. Docker 模式 (Debian构建，兼容性好)"
-    echo "2. 原生模式 (推荐! 彻底避免网络冲突)"
+    echo "1. Docker 模式 (Debian构建)"
+    echo "2. 原生模式 (推荐)"
     read -p "选择 [1-2] (默认1): " MODE_OPT
     if [ "$MODE_OPT" == "2" ]; then DEPLOY_MODE="native"; else DEPLOY_MODE="docker"; fi
 
@@ -246,12 +242,18 @@ run_install() {
         echo -e "${YELLOW}>>> 正在安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
         
+        systemctl stop systemd-resolved 2>/dev/null
+        systemctl disable systemd-resolved 2>/dev/null
+        
         cat > /etc/dnsmasq.conf <<EOF
 port=53
 no-resolv
 server=8.8.8.8
 conf-dir=/etc/dnsmasq.d/,*.conf
 cache-size=1000
+# 强制监听所有接口
+listen-address=::,0.0.0.0
+bind-interfaces
 EOF
         mkdir -p /etc/dnsmasq.d
         cp "$WORK_DIR/dnsmasq.conf" /etc/dnsmasq.d/unlock.conf
@@ -281,19 +283,13 @@ EOF
         if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | bash; fi
         
         cd "$WORK_DIR"
-        
         cat > Dockerfile <<EOF
 FROM debian:bullseye-slim
-RUN apt-get update && \
-    apt-get install -y dnsmasq sniproxy procps && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update && apt-get install -y dnsmasq sniproxy procps && apt-get clean
 RUN echo '#!/bin/sh' > /entrypoint.sh && \\
     echo 'dnsmasq --no-daemon --conf-file=/etc/dnsmasq.conf &' >> /entrypoint.sh && \\
     echo 'sniproxy -c /etc/sniproxy.conf -f' >> /entrypoint.sh && \\
     chmod +x /entrypoint.sh
-
 RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'no-resolv' >> /etc/dnsmasq.conf && \\
     echo 'server=8.8.8.8' >> /etc/dnsmasq.conf && \\
@@ -301,14 +297,10 @@ RUN echo 'port=53' > /etc/dnsmasq.conf && \\
     echo 'cache-size=1000' >> /etc/dnsmasq.conf
 ENTRYPOINT ["/entrypoint.sh"]
 EOF
-
         cat > sniproxy.conf <<EOF
 user daemon
 pidfile /var/run/sniproxy.pid
-resolver {
-    nameserver 8.8.8.8
-    mode ipv4_only
-}
+resolver { nameserver 8.8.8.8; mode ipv4_only; }
 error_log { filename /dev/stderr; priority notice; }
 access_log { filename /dev/stdout; }
 listen 80 { proto http; table http_hosts; }
@@ -316,7 +308,6 @@ listen 443 { proto tls; table https_hosts; }
 table http_hosts { .* *; }
 table https_hosts { .* *; }
 EOF
-
         cat > docker-compose.yml <<EOF
 services:
   unlock:
@@ -329,8 +320,7 @@ services:
       - ./dnsmasq.conf:/etc/dnsmasq.d/custom_unlock.conf
       - ./sniproxy.conf:/etc/sniproxy.conf
 EOF
-        
-        echo -e "${YELLOW}启动容器...${NC}"
+        docker rm -f dns_unlock 2>/dev/null
         docker compose down --remove-orphans 2>/dev/null
         docker compose up -d --build --remove-orphans
     fi
@@ -342,7 +332,7 @@ EOF
 }
 
 # ==========================================================
-# 辅助功能 (修复误报问题)
+# 辅助功能
 # ==========================================================
 
 fw_settings() {
@@ -362,7 +352,6 @@ fw_settings() {
                 iptables -I INPUT -s "$ip" -p tcp --dport 80 -j ACCEPT
                 iptables -I INPUT -s "$ip" -p tcp --dport 443 -j ACCEPT
             done
-            # 注意：这里暂不默认DROP，以免用户把自己锁死
         fi
         echo -e "${GREEN}规则已更新${NC}"
     fi
@@ -370,49 +359,44 @@ fw_settings() {
 }
 
 check_status() {
+    install_base_tools
     clear
     echo -e "${SKY}>>> 系统状态检查 (实测模式)${NC}"
     echo -e "本机 IP: ${GREEN}${FINAL_IP:-未知}${NC}"
     
-    # 端口实测逻辑：尝试连接端口，而不是猜进程名
     check_port_active() {
         local port=$1
         local proto=$2
-        if [ "$proto" == "udp" ]; then
-            # UDP 53 检测比较难，简单用 netstat
-            if netstat -unlp | grep -q ":$port "; then
-                echo -e "端口 $port (UDP): ${GREEN}正常 (监听中)${NC}"
-            else
-                echo -e "端口 $port (UDP): ${RED}异常 (未监听)${NC}"
-            fi
+        # 使用 ss 或 netstat 检测监听
+        if ss -"$proto"nlp | grep -q ":$port " || netstat -"$proto"nlp | grep -q ":$port "; then
+             echo -e "端口 $port ($proto): ${GREEN}正常 (监听中)${NC}"
         else
-            # TCP 检测：直接连接
-            # 使用 timeout 和 bash 内置的 /dev/tcp 进行测试 (无需 nc/telnet)
-            if timeout 1 bash -c "</dev/tcp/127.0.0.1/$port" &>/dev/null; then
-                echo -e "端口 $port (TCP): ${GREEN}正常 (连接成功)${NC}"
-            else
-                echo -e "端口 $port (TCP): ${RED}异常 (无法连接)${NC}"
-            fi
+             echo -e "端口 $port ($proto): ${RED}异常 (未监听)${NC}"
         fi
     }
 
     echo -e "\n端口状态:"
-    check_port_active 53 udp
-    check_port_active 80 tcp
-    check_port_active 443 tcp
+    check_port_active 53 u
+    check_port_active 80 t
+    check_port_active 443 t
     
     echo -e "\n功能实测 (模拟落地机访问):"
     if [ -n "$FINAL_IP" ]; then
-        # 测试 DNS
+        # 1. 尝试本地解析
         echo -n "DNS 劫持测试 (OpenAI): "
         TEST_DNS=$(dig +short @127.0.0.1 openai.com 2>/dev/null)
         if [ "$TEST_DNS" == "$FINAL_IP" ]; then
             echo -e "${GREEN}成功 (解析结果: $TEST_DNS)${NC}"
         else
-            echo -e "${RED}失败 (解析结果: ${TEST_DNS:-无})${NC}"
+            # 2. 如果本地失败，尝试公网IP解析
+            TEST_DNS_PUB=$(dig +short @$FINAL_IP openai.com 2>/dev/null)
+            if [ "$TEST_DNS_PUB" == "$FINAL_IP" ]; then
+                echo -e "${GREEN}成功 (公网IP解析正确)${NC}"
+            else
+                echo -e "${RED}失败 (解析结果: ${TEST_DNS:-无})${NC}"
+            fi
         fi
         
-        # 测试 Sniproxy (HTTP)
         echo -n "Sniproxy 转发测试 (HTTP): "
         TEST_HTTP=$(curl -s -o /dev/null -w "%{http_code}" -H "Host: whatismyip.akamai.com" http://127.0.0.1)
         if [[ "$TEST_HTTP" =~ ^(200|301|302|400|403|404)$ ]]; then
@@ -567,14 +551,10 @@ EOF
     read -p "按回车返回菜单..." _
 }
 
-# ==========================================================
-# 主菜单
-# ==========================================================
-
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V17.0 状态修复版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V18.0 依赖补全版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
