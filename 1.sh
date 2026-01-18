@@ -1,12 +1,11 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V10.0 终极排错版)
+#   V2bX 专用解锁服务总控脚本 (V11.0 强制清理版)
 #   
-#   更新日志：
-#   1. 新增【查看错误日志】菜单，方便排查
-#   2. 安装前暴力清理端口占用 (Fix systemd-resolved)
-#   3. 修复 Docker Entrypoint 逻辑
-#   4. 完美保留 V2bX JSON 生成与审计规则
+#   修复日志：
+#   1. 修复 "Conflict. The container name is already in use" 错误
+#   2. 启动前强制删除名为 dns_unlock 的旧容器
+#   3. 增加 --remove-orphans 参数清理孤儿容器
 # ==========================================================
 
 RED='\033[0;31m'
@@ -45,13 +44,6 @@ spinner() {
     printf "\r\033[K"
 }
 
-validate_ip() {
-    local ip="$1"
-    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
-    if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then return 0; fi
-    return 1
-}
-
 save_config() {
     mkdir -p "$WORK_DIR"
     echo "FINAL_IP=\"$FINAL_IP\"" > "$CONFIG_FILE"
@@ -60,30 +52,37 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 暴力释放端口
-force_release_ports() {
-    echo -e "${YELLOW}>>> 正在清理端口占用...${NC}"
-    # 停止常见的占用服务
+# 暴力释放端口 & 清理 Docker
+force_cleanup() {
+    echo -e "${YELLOW}>>> 正在执行强制清理...${NC}"
+    
+    # 1. 停止占用端口的系统服务
     systemctl stop systemd-resolved 2>/dev/null
     systemctl disable systemd-resolved 2>/dev/null
     systemctl stop dnsmasq 2>/dev/null
     systemctl stop sniproxy 2>/dev/null
-    systemctl stop nginx 2>/dev/null
-    systemctl stop apache2 2>/dev/null
     
-    # 杀掉进程
+    # 2. 杀掉占用进程
     fuser -k 53/tcp 2>/dev/null
     fuser -k 53/udp 2>/dev/null
     fuser -k 80/tcp 2>/dev/null
     fuser -k 443/tcp 2>/dev/null
     
-    # 临时修改 resolv.conf 防止构建失败
+    # 3. 【关键修复】强制删除旧的 Docker 容器
+    if command -v docker &> /dev/null; then
+        echo -e "${YELLOW}正在删除旧容器...${NC}"
+        docker rm -f dns_unlock 2>/dev/null
+        # 清理可能存在的 compose 项目
+        cd "$WORK_DIR" 2>/dev/null && docker compose down --remove-orphans 2>/dev/null
+    fi
+    
+    # 临时修改 resolv.conf
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
-    echo -e "${GREEN}端口清理完毕${NC}"
+    echo -e "${GREEN}清理完毕${NC}"
 }
 
 # ==========================================================
-# 核心逻辑
+# 核心逻辑 (保持原版)
 # ==========================================================
 
 define_rules() {
@@ -240,8 +239,8 @@ select_services_logic() {
 run_install() {
     check_root
     
-    # 强制清理端口
-    force_release_ports
+    # 强制清理端口和旧容器
+    force_cleanup
     
     # 1. IP 选择
     IPV4=$(curl -4s --max-time 3 api.ip.sb/ip || curl -4s --max-time 3 ifconfig.me)
@@ -274,7 +273,7 @@ run_install() {
         echo -e "${YELLOW}>>> 正在安装原生依赖...${NC}"
         apt-get update && apt-get install -y dnsmasq sniproxy
         
-        # 确保停止并禁用 systemd-resolved
+        # 再次确保停止冲突服务
         systemctl stop systemd-resolved 2>/dev/null
         systemctl disable systemd-resolved 2>/dev/null
         
@@ -354,8 +353,12 @@ services:
 EOF
         
         echo -e "${YELLOW}启动容器...${NC}"
-        docker compose down 2>/dev/null
-        docker compose up -d --build
+        # 【关键修复】彻底删除旧容器和孤儿容器
+        docker rm -f dns_unlock 2>/dev/null
+        docker compose down --remove-orphans 2>/dev/null
+        
+        # 启动
+        docker compose up -d --build --remove-orphans
     fi
 
     save_config
@@ -569,7 +572,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V10.0 终极排错版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V11.0 终极排错版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
