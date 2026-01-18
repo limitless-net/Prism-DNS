@@ -131,6 +131,110 @@ print_banner() {
     echo -e "${SKY}╚══════════════════════════════════════════════════════╝${NC}"
 }
 
+whitelist_add_ips_no_pause() {
+    # Add one or multiple IPs (space-separated) into firewall + whitelist file.
+    # This is used by install wizard to keep the flow menu-driven.
+    ensure_runtime_files
+    whitelist_normalize_file
+
+    local ips="$*"
+    [ -z "$ips" ] && return 0
+
+    local ip
+    for ip in $ips; do
+        if ! validate_ip "$ip"; then
+            log_warn "无效 IP：$ip（已跳过）"
+            continue
+        fi
+        if firewall_apply_allow_ip "$ip"; then
+            echo "$ip" >> "$WHITELIST_FILE" 2>/dev/null || true
+            log_ok "已添加并放行：$ip"
+        else
+            log_err "未检测到 ufw/iptables，无法自动放行：$ip"
+        fi
+    done
+
+    whitelist_normalize_file
+}
+
+menu_install_steps() {
+    ensure_runtime_files
+
+    while true; do
+        clear
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}"
+        echo -e "${SKY}  分步安装 / 维护${NC}"
+        echo -e "${SKY}═══════════════════════════════════════════════${NC}\n"
+        echo -e "${YELLOW}1) 检查端口占用 (53/80/443)${NC}"
+        echo -e "${YELLOW}2) 选择/检测解锁机公网 IP${NC}"
+        echo -e "${YELLOW}3) 选择部署模式 (Docker/原生)${NC}"
+        echo -e "${YELLOW}4) 安装依赖 (按当前模式)${NC}"
+        echo -e "${YELLOW}5) 选择解锁服务并部署${NC}"
+        echo -e "${YELLOW}6) 白名单：添加落地机 IP${NC}"
+        echo -e "${YELLOW}7) 验证服务状态 + DNS${NC}"
+        echo -e "${YELLOW}8) 输出 JSON（需已完成第5步）${NC}"
+        echo -e "${YELLOW}0) 返回主菜单${NC}"
+        echo ""
+        read -r -p "请选择: " step_choice
+
+        case "$step_choice" in
+            1)
+                check_port_availability
+                pause_return
+                ;;
+            2)
+                select_public_ip
+                save_state
+                pause_return
+                ;;
+            3)
+                select_deploy_mode
+                save_state
+                pause_return
+                ;;
+            4)
+                if [ "$DEPLOY_MODE" = "native" ]; then
+                    install_native
+                else
+                    install_docker
+                fi
+                pause_return
+                ;;
+            5)
+                deploy_service
+                save_state
+                pause_return
+                ;;
+            6)
+                menu_whitelist_add
+                ;;
+            7)
+                verify_services
+                pause_return
+                ;;
+            8)
+                if [ -z "$FINAL_IP" ]; then
+                    ensure_final_ip_loaded || true
+                fi
+                if [ -z "$FINAL_IP" ] || [ -z "$FINAL_JSON_LIST" ]; then
+                    log_warn "缺少必要信息：需要先完成第5步（选择解锁服务并部署）"
+                    pause_return
+                else
+                    generate_json
+                    pause_return
+                fi
+                ;;
+            0)
+                return 0
+                ;;
+            *)
+                log_warn "无效选项"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 menu_show_status() {
     ensure_runtime_files
     ensure_final_ip_loaded || true
@@ -2190,21 +2294,25 @@ uninstall_service() {
 
 # Main execution flow / 主流程
 main() {
-    # Backward-compatible entrypoint: now provides a nicer menu UI.
+    # Entry point: all interactions happen via menu.
     ensure_runtime_files
-    select_language
+    load_state
+    # Default Chinese if not set
+    [ -z "$LANG_CHOICE" ] && LANG_CHOICE="zh"
 
     while true; do
         print_banner
         echo ""
-        echo -e "${YELLOW}1) 安装 / 重新安装${NC}"
-        echo -e "${YELLOW}2) 卸载${NC}"
-        echo -e "${YELLOW}3) 状态检测${NC}"
-        echo -e "${YELLOW}4) 连通性检测${NC}"
-        echo -e "${YELLOW}5) 是否解锁检测${NC}"
-        echo -e "${YELLOW}6) DNS 连接状态检测${NC}"
-        echo -e "${YELLOW}7) 白名单管理（添加/删除/查看）${NC}"
-        echo -e "${YELLOW}8) 日志${NC}"
+        echo -e "${YELLOW}1) 一键安装 / 重新安装${NC}"
+        echo -e "${YELLOW}2) 分步安装 / 维护${NC}"
+        echo -e "${YELLOW}3) 卸载${NC}"
+        echo -e "${YELLOW}4) 状态检测${NC}"
+        echo -e "${YELLOW}5) 连通性检测${NC}"
+        echo -e "${YELLOW}6) 是否解锁检测${NC}"
+        echo -e "${YELLOW}7) DNS 连接状态检测${NC}"
+        echo -e "${YELLOW}8) 白名单管理（添加/删除/查看）${NC}"
+        echo -e "${YELLOW}9) 日志${NC}"
+        echo -e "${YELLOW}L) 语言切换 (中文/English)${NC}"
         echo -e "${YELLOW}0) 退出${NC}"
         echo ""
         read -r -p "请选择功能: " menu_choice
@@ -2225,29 +2333,40 @@ main() {
                 fi
 
                 deploy_service
-                set_firewall
+                # Firewall whitelist is managed via menu to avoid extra legacy prompts.
+                echo ""
+                log_info "下一步建议：在菜单【白名单管理】里添加落地机公网 IP，防止解锁端口被滥用。"
+                read -r -p "现在添加白名单 IP？(可空格输入多个，直接回车跳过): " _ips
+                if [ -n "$_ips" ]; then
+                    whitelist_add_ips_no_pause $_ips
+                else
+                    log_warn "已跳过白名单添加"
+                fi
                 verify_services
                 save_state
                 generate_json
                 pause_return
                 ;;
             2)
+                menu_install_steps
+                ;;
+            3)
                 uninstall_service
                 pause_return
                 ;;
-            3)
+            4)
                 menu_show_status
                 ;;
-            4)
+            5)
                 menu_check_connectivity
                 ;;
-            5)
+            6)
                 menu_check_unlock
                 ;;
-            6)
+            7)
                 menu_check_dns_status
                 ;;
-            7)
+            8)
                 # Whitelist submenu
                 while true; do
                     clear
@@ -2269,8 +2388,12 @@ main() {
                     esac
                 done
                 ;;
-            8)
+            9)
                 menu_show_logs
+                ;;
+            L|l)
+                select_language
+                save_state
                 ;;
             0)
                 echo ""
