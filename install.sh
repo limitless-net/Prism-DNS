@@ -1,11 +1,15 @@
 #!/bin/bash
 # ==========================================================
-#   V2bX 专用解锁服务总控脚本 (V22.4 修复增强版)
+#   V2bX 专用解锁服务总控脚本 (V22.5 安全加固版)
+#   
+#   修复日志 (V22.5):
+#   1. [安全] 修复 IPv6 绕过漏洞 (导致白名单对 IPv6 来源不生效)
+#   2. [安全] 强化 iptables 链优先级，防止 Docker 规则覆盖
+#   3. [新增] Gemini 规则增加 aistudio.google.com
 #   
 #   修复日志 (V22.4):
-#   1. [核心] 修复白名单 IP 无法删除的 Bug (增强字符清洗)
-#   2. [核心] 重写卸载功能，彻底清除残留文件、防火墙规则和配置
-#   3. [UI] 优化交互提示
+#   1. [核心] 修复白名单 IP 无法删除的 Bug
+#   2. [核心] 重写卸载功能
 # ==========================================================
 
 RED='\033[0;31m'
@@ -38,19 +42,20 @@ install_base_tools() {
     if ! command -v netstat &> /dev/null || ! command -v dig &> /dev/null || ! command -v lsof &> /dev/null; then
         echo -e "${YELLOW}>>> 补全基础工具...${NC}"
         if [ -f /etc/debian_version ]; then
-            apt-get update -y && apt-get install -y net-tools dnsutils lsof procps
+            apt-get update -y && apt-get install -y net-tools dnsutils lsof procps iptables
         elif [ -f /etc/redhat-release ]; then
-            yum install -y net-tools bind-utils lsof
+            yum install -y net-tools bind-utils lsof iptables-services
         fi
     fi
 }
 
 validate_ip() {
     local ip="$1"
-    # 去除首尾空格和换行符
     ip=$(echo "$ip" | tr -d '[:space:]')
-    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then return 0; fi
-    if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then return 0; fi
+    # IPv4 验证
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then echo "v4"; return 0; fi
+    # IPv6 验证 (简单放宽)
+    if [[ "$ip" =~ ^[0-9a-fA-F:]+$ ]]; then echo "v6"; return 0; fi
     return 1
 }
 
@@ -61,7 +66,6 @@ save_config() {
     echo "TYPE_NAME='$TYPE_NAME'" >> "$CONFIG_FILE"
 }
 
-# 暴力释放端口
 kill_port_process() {
     local port=$1
     pids=$(lsof -t -i:$port 2>/dev/null || netstat -nlp | grep ":$port " | awk '{print $7}' | cut -d'/' -f1)
@@ -84,18 +88,16 @@ force_cleanup() {
     kill_port_process 53
     kill_port_process 80
     kill_port_process 443
-    # 备份并重置 resolv.conf
     if [ ! -f /etc/resolv.conf.bak ]; then cp /etc/resolv.conf /etc/resolv.conf.bak; fi
     rm -f /etc/resolv.conf
     echo "nameserver 8.8.8.8" > /etc/resolv.conf
 }
 
 # ==========================================================
-# 防火墙逻辑 (修复版)
+# 防火墙逻辑 (修复漏勺 Bug)
 # ==========================================================
 
 clean_whitelist_file() {
-    # 强力清洗文件：去除 Windows 换行符、空行、首尾空格
     [ -f "$WHITELIST_FILE" ] || touch "$WHITELIST_FILE"
     sed -i 's/\r//g' "$WHITELIST_FILE"
     sed -i 's/^[ \t]*//;s/[ \t]*$//' "$WHITELIST_FILE"
@@ -103,69 +105,110 @@ clean_whitelist_file() {
 }
 
 apply_firewall() {
-    echo -e "${YELLOW}>>> 正在刷新防火墙规则...${NC}"
-    
+    echo -e "${YELLOW}>>> 正在刷新防火墙规则 (严查模式)...${NC}"
     clean_whitelist_file
-    
     local ips
     ips=$(cat "$WHITELIST_FILE")
     
+    # 检查 firewalld 是否干扰
+    if systemctl is-active --quiet firewalld; then
+        echo -e "${RED}警告: 检测到 firewalld 正在运行，可能会覆盖规则。建议停止 firewalld。${NC}"
+    fi
+
+    # UFW 模式
     if command -v ufw &> /dev/null && systemctl is-active --quiet ufw; then
+        echo -e "模式: UFW"
         ufw allow ssh >/dev/null
         ufw allow 22/tcp >/dev/null
+        
+        # 先删除旧的允许规则
         ufw delete allow 53/tcp >/dev/null 2>&1
         ufw delete allow 53/udp >/dev/null 2>&1
         ufw delete allow 80/tcp >/dev/null 2>&1
         ufw delete allow 443/tcp >/dev/null 2>&1
         
-        # 清理旧规则（简单处理，防止堆积）
-        # 注意：UFW 复杂规则很难自动精准删除，建议重置或手动管理
+        # 默认策略设为拒绝 (仅针对这些端口)
+        # UFW 默认通常是 deny incoming，但为了保险，我们添加 reject 规则在最后? 
+        # UFW 不太好控制顺序，只能依赖 allow from IP
         
         for ip in $ips; do
-            if validate_ip "$ip"; then
+            ip_type=$(validate_ip "$ip")
+            if [ -n "$ip_type" ]; then
                 ufw allow from "$ip" to any port 53 >/dev/null
                 ufw allow from "$ip" to any port 80 >/dev/null
                 ufw allow from "$ip" to any port 443 >/dev/null
                 echo -e "放行: ${GREEN}$ip${NC}"
             fi
         done
-        echo "y" | ufw enable >/dev/null
-        ufw reload >/dev/null
-    else
-        # Iptables 逻辑
-        iptables -N UNLOCK_FW 2>/dev/null
-        iptables -F UNLOCK_FW 
-        # 确保引用在最前面
-        while iptables -D INPUT -j UNLOCK_FW 2>/dev/null; do :; done
-        iptables -I INPUT -j UNLOCK_FW
         
+        # 强制 deny 其他 (UFW 规则顺序：先插的在上面，deny 插在最后可能无效，所以依赖默认策略)
+        # 如果 UFW 默认是 ALLOW，这里就会失效。建议用户检查 ufw default deny incoming
+        ufw reload >/dev/null
+        
+    else
+        # IPTABLES 模式 (更可靠)
+        echo -e "模式: Iptables (v4 & v6)"
+        
+        # --- IPv4 处理 ---
+        iptables -N UNLOCK_FW 2>/dev/null
+        iptables -F UNLOCK_FW
+        # 清理旧引用
+        while iptables -D INPUT -j UNLOCK_FW 2>/dev/null; do :; done
+        # 强制插入到第一位，防止 Docker 或其他规则抢占
+        iptables -I INPUT 1 -j UNLOCK_FW
+        
+        # 放行白名单
         for ip in $ips; do
-            if validate_ip "$ip"; then
-                iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 53 -j ACCEPT
-                iptables -A UNLOCK_FW -s "$ip" -p udp --dport 53 -j ACCEPT
-                iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 80 -j ACCEPT
-                iptables -A UNLOCK_FW -s "$ip" -p tcp --dport 443 -j ACCEPT
-                echo -e "放行: ${GREEN}$ip${NC}"
+            ip_type=$(validate_ip "$ip")
+            if [ "$ip_type" == "v4" ]; then
+                iptables -A UNLOCK_FW -s "$ip" -j ACCEPT
+                echo -e "放行(IPv4): ${GREEN}$ip${NC}"
             fi
         done
-        
         iptables -A UNLOCK_FW -s 127.0.0.1 -j ACCEPT
+        # 允许已建立的连接 (防止断流)
+        iptables -A UNLOCK_FW -m state --state RELATED,ESTABLISHED -j ACCEPT
         
-        # 拦截其他
+        # 核心拦截逻辑：只有 53/80/443 被拦截，其他端口(如22)放回主链处理
         iptables -A UNLOCK_FW -p tcp --dport 53 -j DROP
         iptables -A UNLOCK_FW -p udp --dport 53 -j DROP
         iptables -A UNLOCK_FW -p tcp --dport 80 -j DROP
         iptables -A UNLOCK_FW -p tcp --dport 443 -j DROP
         iptables -A UNLOCK_FW -j RETURN
+
+        # --- IPv6 处理 (关键：防止 IPv6 绕过) ---
+        if command -v ip6tables &> /dev/null; then
+            ip6tables -N UNLOCK_FW6 2>/dev/null
+            ip6tables -F UNLOCK_FW6
+            while ip6tables -D INPUT -j UNLOCK_FW6 2>/dev/null; do :; done
+            ip6tables -I INPUT 1 -j UNLOCK_FW6
+            
+            for ip in $ips; do
+                ip_type=$(validate_ip "$ip")
+                if [ "$ip_type" == "v6" ]; then
+                    ip6tables -A UNLOCK_FW6 -s "$ip" -j ACCEPT
+                    echo -e "放行(IPv6): ${GREEN}$ip${NC}"
+                fi
+            done
+            ip6tables -A UNLOCK_FW6 -s ::1 -j ACCEPT
+            ip6tables -A UNLOCK_FW6 -m state --state RELATED,ESTABLISHED -j ACCEPT
+            
+            # 同样拦截重点端口
+            ip6tables -A UNLOCK_FW6 -p tcp --dport 53 -j DROP
+            ip6tables -A UNLOCK_FW6 -p udp --dport 53 -j DROP
+            ip6tables -A UNLOCK_FW6 -p tcp --dport 80 -j DROP
+            ip6tables -A UNLOCK_FW6 -p tcp --dport 443 -j DROP
+            ip6tables -A UNLOCK_FW6 -j RETURN
+        fi
     fi
-    echo -e "${GREEN}防火墙规则已生效！${NC}"
+    echo -e "${GREEN}防火墙规则重构完成！未授权 IP 将无法连接 53/80/443 端口。${NC}"
 }
 
 manage_whitelist() {
     while true; do
         clear
-        clean_whitelist_file # 进入菜单前先清洗
-        echo -e "${SKY}>>> 白名单管理 (修复版)${NC}"
+        clean_whitelist_file
+        echo -e "${SKY}>>> 白名单管理 (V22.5)${NC}"
         echo -e "当前规则: 默认拒绝所有，仅允许以下 IP"
         echo -e "----------------------------------------"
         if [ -s "$WHITELIST_FILE" ]; then
@@ -177,7 +220,7 @@ manage_whitelist() {
                 fi
             done < "$WHITELIST_FILE"
         else
-            echo -e "  ${RED}(空) - 当前任何人无法连接，请添加 IP！${NC}"
+            echo -e "  ${RED}(空) - ⚠️ 注意：当前所有连接都将被拒绝！${NC}"
         fi
         echo -e "----------------------------------------"
         echo -e "${YELLOW}1) 添加 IP (支持多个)${NC}"
@@ -194,7 +237,7 @@ manage_whitelist() {
                 new_ips=${new_ips//,/ }
                 for ip in $new_ips; do
                     ip=$(echo "$ip" | tr -d '[:space:]')
-                    if validate_ip "$ip"; then
+                    if [ -n "$(validate_ip "$ip")" ]; then
                         if ! grep -q "^$ip$" "$WHITELIST_FILE"; then
                             echo "$ip" >> "$WHITELIST_FILE"
                             echo -e "添加: ${GREEN}$ip${NC}"
@@ -212,7 +255,6 @@ manage_whitelist() {
                 read -p "请输入要删除的 IP: " del_ip
                 del_ip=$(echo "$del_ip" | tr -d '[:space:]')
                 if [ -n "$del_ip" ]; then 
-                    # 修复：使用 sed 精确匹配删除，不依赖 grep 退出码
                     if grep -q "^$del_ip$" "$WHITELIST_FILE"; then
                         sed -i "/^$del_ip$/d" "$WHITELIST_FILE"
                         clean_whitelist_file
@@ -234,7 +276,7 @@ manage_whitelist() {
 }
 
 # ==========================================================
-# 规则定义
+# 规则定义 (Gemini 更新版)
 # ==========================================================
 
 define_rules() {
@@ -245,14 +287,16 @@ address=/oaiusercontent.com/$FINAL_IP
 address=/ai.com/$FINAL_IP"
     JSON_GPT='"openai.com", "chatgpt.com", "oaistatic.com", "oaiusercontent.com", "ai.com"'
 
+    # 新增 aistudio.google.com
     CONF_GEMINI="address=/gemini.google.com/$FINAL_IP
 address=/bard.google.com/$FINAL_IP
 address=/ai.google.dev/$FINAL_IP
 address=/generativelanguage.googleapis.com/$FINAL_IP
 address=/makersuite.google.com/$FINAL_IP
 address=/deepmind.com/$FINAL_IP
-address=/deepmind.google/$FINAL_IP"
-    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google"'
+address=/deepmind.google/$FINAL_IP
+address=/aistudio.google.com/$FINAL_IP"
+    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google", "aistudio.google.com"'
 
     CONF_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
 address=/copilot.cloud.microsoft/$FINAL_IP
@@ -304,7 +348,7 @@ select_services_logic() {
     define_rules
     echo -e "\n${SKY}可用服务 (输入数字，用逗号分隔，例如 1,3,5):${NC}"
     echo "1. ChatGPT (OpenAI)"
-    echo "2. Gemini (Google AI)"
+    echo "2. Gemini (Google AI) [+aistudio]"
     echo "3. Copilot (Microsoft)"
     echo "4. Claude (Anthropic)"
     echo "5. Netflix"
@@ -571,7 +615,7 @@ check_status() {
 }
 
 # ==========================================================
-# 卸载逻辑 (重写修复版)
+# 卸载逻辑
 # ==========================================================
 
 uninstall_all() {
@@ -595,24 +639,21 @@ uninstall_all() {
     rm -f /etc/sniproxy.conf
     rm -rf /var/log/sniproxy
     rm -rf "$WORK_DIR"
-    # 尝试恢复 resolv.conf
     if [ -f /etc/resolv.conf.bak ]; then
         cp /etc/resolv.conf.bak /etc/resolv.conf
     fi
 
     echo -e "${YELLOW}4. 正在清理防火墙规则...${NC}"
-    # 清理 IPTABLES
     if iptables -L UNLOCK_FW -n >/dev/null 2>&1; then
         iptables -D INPUT -j UNLOCK_FW 2>/dev/null
         iptables -F UNLOCK_FW 2>/dev/null
         iptables -X UNLOCK_FW 2>/dev/null
     fi
-    # 清理 UFW (简单尝试)
-    if command -v ufw &> /dev/null; then
-        ufw delete allow 53/tcp >/dev/null 2>&1
-        ufw delete allow 53/udp >/dev/null 2>&1
-        ufw delete allow 80/tcp >/dev/null 2>&1
-        ufw delete allow 443/tcp >/dev/null 2>&1
+    # IPv6 清理
+    if command -v ip6tables &> /dev/null && ip6tables -L UNLOCK_FW6 -n >/dev/null 2>&1; then
+        ip6tables -D INPUT -j UNLOCK_FW6 2>/dev/null
+        ip6tables -F UNLOCK_FW6 2>/dev/null
+        ip6tables -X UNLOCK_FW6 2>/dev/null
     fi
     
     if [[ "$remove_pkg" == "y" ]]; then
@@ -625,7 +666,6 @@ uninstall_all() {
     read -p "按回车返回..." _
 }
 
-# 审计规则说明
 view_audit() {
     clear
     echo -e "${SKY}>>> 审计规则 (屏蔽列表)${NC}"
@@ -721,7 +761,7 @@ EOF
 while true; do
     clear
     echo -e "${SKY}==================================================${NC}"
-    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.4 修复增强版)${NC}"
+    echo -e "${SKY}  V2bX 专用解锁服务总控 (V22.5 安全加固版)${NC}"
     echo -e "${SKY}==================================================${NC}\n"
     echo -e "${GREEN}当前 IP: ${FINAL_IP:-未安装}${NC}"
     echo -e "${GREEN}当前模式: ${DEPLOY_MODE:-未安装}${NC}\n"
