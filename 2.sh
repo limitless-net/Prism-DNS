@@ -598,8 +598,8 @@ check_status() {
     # 端口监听状态
     echo -e "  ${CYAN}端口监听状态${NC}"
     for port in 53 80 443; do
-        # 使用更精确的端口匹配，支持 *:80, 0.0.0.0:80, :::80, [::]:80 等格式
-        if ss -tuln 2>/dev/null | grep -qE "(\*|0\.0\.0\.0|\[::\]|::):${port}[[:space:]]"; then
+        # 使用更精确的端口匹配，支持 *:80, 0.0.0.0:80, [::]:80 等格式
+        if ss -tuln 2>/dev/null | grep -qE "(\*|0\.0\.0\.0|\[::\]):${port}[[:space:]]"; then
             echo -e "  ├─ 端口 $port:   ${GREEN}● 正常 (监听中)${NC}"
         else
             echo -e "  ├─ 端口 $port:   ${RED}○ 异常 (未监听)${NC}"
@@ -1187,9 +1187,21 @@ view_logs() {
             msg_info "DNS 查询日志（仅显示解锁域名请求）..."
             echo ""
             if [ "$DEPLOY_MODE" = "Docker" ] || [ "$DEPLOY_MODE" = "docker" ]; then
-                docker logs --tail 100 dns_unlock 2>&1 | grep -E "(query|reply|cached)" || msg_warn "未找到 DNS 查询记录"
+                local dns_logs
+                dns_logs=$(docker logs --tail 100 dns_unlock 2>&1 | grep -E "(query|reply|cached)" || true)
+                if [ -n "$dns_logs" ]; then
+                    echo "$dns_logs"
+                else
+                    msg_warn "未找到 DNS 查询记录"
+                fi
             else
-                journalctl -u dnsmasq -n 100 --no-pager 2>&1 | grep -E "(query|reply|cached)" || msg_warn "未找到 DNS 查询记录"
+                local dns_logs
+                dns_logs=$(journalctl -u dnsmasq -n 100 --no-pager 2>&1 | grep -E "(query|reply|cached)" || true)
+                if [ -n "$dns_logs" ]; then
+                    echo "$dns_logs"
+                else
+                    msg_warn "未找到 DNS 查询记录"
+                fi
             fi
             press_enter
             ;;
