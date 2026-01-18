@@ -324,8 +324,10 @@ address=/generativelanguage.googleapis.com/$FINAL_IP
 address=/makersuite.google.com/$FINAL_IP
 address=/deepmind.com/$FINAL_IP
 address=/deepmind.google/$FINAL_IP
-address=/aistudio.google.com/$FINAL_IP"
-    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google", "aistudio.google.com"'
+address=/aistudio.google.com/$FINAL_IP
+address=/alkalimakersuite-pa.clients6.google.com/$FINAL_IP
+address=/gwd.google.com/$FINAL_IP"
+    JSON_GEMINI='"gemini.google.com", "bard.google.com", "ai.google.dev", "generativelanguage.googleapis.com", "makersuite.google.com", "deepmind.com", "deepmind.google", "aistudio.google.com", "alkalimakersuite-pa.clients6.google.com", "gwd.google.com"'
 
     CONF_COPILOT="address=/copilot.microsoft.com/$FINAL_IP
 address=/copilot.cloud.microsoft/$FINAL_IP
